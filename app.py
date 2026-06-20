@@ -150,6 +150,7 @@ def init_db():
             resume_path TEXT,
             status VARCHAR(50) NOT NULL,
             screenshot_path TEXT,
+            contacts TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -169,11 +170,23 @@ def init_db():
             resume_path TEXT,
             status TEXT NOT NULL,
             screenshot_path TEXT,
+            contacts TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         ''')
     conn.commit()
+
+    # Migration: Add contacts column if it doesn't exist (for existing databases)
+    try:
+        cur = db_execute(conn, "SELECT * FROM jobs LIMIT 1")
+        colnames = [desc[0] for desc in cur.description]
+        if 'contacts' not in colnames:
+            log_message("Database", "Migrating database: adding 'contacts' column to jobs table...")
+            db_execute(conn, "ALTER TABLE jobs ADD COLUMN contacts TEXT")
+            conn.commit()
+    except Exception as e:
+        log_message("Database", f"Database migration error: {str(e)}", "ERROR")
 
     # Prepopulate with dummy jobs if database is empty for visual showcase
     cur = db_execute(conn, "SELECT COUNT(*) FROM jobs")
@@ -194,10 +207,10 @@ def init_db():
             "Discovered"
         ))
         
-        # Requires Intervention Job with mock Captcha screenshot
+        # Requires Intervention Job with mock Captcha screenshot and mock contacts
         db_execute(conn, '''
-        INSERT INTO jobs (title, company, description, url, location, status, match_score, match_reason, screenshot_path)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (url) DO NOTHING
+        INSERT INTO jobs (title, company, description, url, location, status, match_score, match_reason, screenshot_path, contacts)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (url) DO NOTHING
         ''', (
             "Cloud Infrastructure Engineer", 
             "GitLab Inc.", 
@@ -207,7 +220,11 @@ def init_db():
             "Requires Intervention",
             88,
             "Matches skills: GitLab CI/CD, Linux, Python, PostgreSQL. Highly relevant projects.",
-            "/static/screenshots/captcha_job_sample.png"
+            "/static/screenshots/captcha_job_sample.png",
+            json.dumps([
+                {"name": "Sid Sijbrandij", "role": "Co-Founder & CEO", "email": "sid@gitlab.com", "pitch_type": "executive", "status": "pending"},
+                {"name": "HR Recruitment", "role": "HR Director", "email": "hr@gitlab.com", "pitch_type": "hr", "status": "pending"}
+            ])
         ))
         
         # Create a mock CAPTCHA image using PIL
@@ -249,6 +266,132 @@ def update_job_screenshot(job_id: int, screenshot_path: str):
     db_execute(conn, "UPDATE jobs SET screenshot_path = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s", (screenshot_path, job_id))
     conn.commit()
     conn.close()
+
+# --- Snov.io Contact Enrichment & Guessed Target Generation ---
+
+_SNOV_TOKEN = None
+_SNOV_TOKEN_EXPIRES_AT = 0
+
+def get_snov_access_token():
+    global _SNOV_TOKEN, _SNOV_TOKEN_EXPIRES_AT
+    current_time = time.time()
+    if _SNOV_TOKEN and current_time < _SNOV_TOKEN_EXPIRES_AT - 60:
+        return _SNOV_TOKEN
+        
+    user_id = os.environ.get("SNOV_USER_ID")
+    secret = os.environ.get("SNOV_SECRET")
+    
+    if not user_id or not secret or user_id == "your_snov_user_id_here" or secret == "your_snov_secret_here":
+        return None
+        
+    url = "https://api.snov.io/v2/oauth/access_token"
+    payload = {
+        "grant_type": "client_credentials",
+        "client_id": user_id,
+        "client_secret": secret
+    }
+    
+    try:
+        response = httpx.post(url, data=payload, timeout=15.0)
+        if response.status_code == 200:
+            data = response.json()
+            _SNOV_TOKEN = data.get("access_token")
+            expires_in = data.get("expires_in", 3600)
+            _SNOV_TOKEN_EXPIRES_AT = current_time + expires_in
+            log_message("Enrichment", "Successfully authenticated with Snov.io API and received new access token.", "SUCCESS")
+            return _SNOV_TOKEN
+    except Exception as e:
+        log_message("Enrichment", f"Snov.io Authentication failed: {str(e)}", "WARNING")
+    return None
+
+async def find_snov_contacts(company_name: str) -> list:
+    token = get_snov_access_token()
+    if not token:
+        return []
+        
+    clean_company = company_name.lower().replace(" ", "").replace(".", "").replace("inc", "").replace("ltd", "").strip()
+    domain = f"{clean_company}.com"
+    
+    headers = {"Authorization": f"Bearer {token}"}
+    start_url = "https://api.snov.io/v2/domain-search/start/"
+    payload = {"domain": domain}
+    
+    log_message("Enrichment", f"Initiating Snov.io Domain Search task for domain: '{domain}'...")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(start_url, headers=headers, data=payload)
+            if response.status_code != 200:
+                log_message("Enrichment", f"Snov.io Domain Search start failed: Status {response.status_code}", "WARNING")
+                return []
+            start_data = response.json()
+            task_hash = start_data.get("task_hash")
+            if not task_hash:
+                log_message("Enrichment", f"Snov.io did not return task hash for domain: '{domain}'", "WARNING")
+                return []
+                
+            result_url = f"https://api.snov.io/v2/domain-search/result/{task_hash}"
+            max_attempts = 5
+            for attempt in range(max_attempts):
+                log_message("Enrichment", f"Retrieving Snov.io results (attempt {attempt + 1}/{max_attempts})...")
+                res = await client.get(result_url, headers=headers)
+                if res.status_code == 200:
+                    result_data = res.json()
+                    if result_data.get("status") == "processing":
+                        await asyncio.sleep(2)
+                        continue
+                    
+                    contacts_data = result_data.get("contacts", {})
+                    prospects = contacts_data.get("prospects", [])
+                    
+                    found_targets = []
+                    for p in prospects:
+                        position = p.get("position", "").lower()
+                        email = p.get("email")
+                        name = p.get("name", "Unknown Contact")
+                        if not email:
+                            continue
+                        
+                        role = p.get("position", "Executive")
+                        pitch_type = "hr"
+                        is_match = False
+                        
+                        if any(w in position for w in ["founder", "co-founder", "ceo", "cto", "cio", "coo", "president"]):
+                            pitch_type = "executive"
+                            is_match = True
+                        elif any(w in position for w in ["hr", "recruiter", "talent", "recruitment", "people", "hiring"]):
+                            pitch_type = "hr"
+                            is_match = True
+                            
+                        if is_match:
+                            found_targets.append({
+                                "name": name,
+                                "role": role,
+                                "email": email,
+                                "pitch_type": pitch_type,
+                                "status": "pending"
+                            })
+                    return found_targets
+    except Exception as e:
+        log_message("Enrichment", f"Unexpected error during Snov.io Domain Search: {str(e)}", "WARNING")
+    return []
+
+async def get_or_generate_contacts(company_name: str, job_description: str) -> list:
+    # 1. Attempt Snov.io search
+    contacts = await find_snov_contacts(company_name)
+    if contacts:
+        log_message("Enrichment", f"Discovered {len(contacts)} contacts via Snov.io for {company_name}.", "SUCCESS")
+        return contacts
+        
+    # 2. Fallback to standard guessed addresses
+    clean_company = company_name.lower().replace(" ", "").replace(".", "").replace("inc", "").replace("ltd", "").strip()
+    domain = f"{clean_company}.com"
+    log_message("Enrichment", f"Snov.io not active or returned empty. Pre-populating guessed contacts for {domain}.")
+    return [
+        {"name": "Founder", "role": "Founder", "email": f"founder@{domain}", "pitch_type": "executive", "status": "pending"},
+        {"name": "Co-Founder", "role": "Co-Founder", "email": f"cofounder@{domain}", "pitch_type": "executive", "status": "pending"},
+        {"name": "HR Director", "role": "HR Director", "email": f"hr@{domain}", "pitch_type": "hr", "status": "pending"},
+        {"name": "Recruitment Team", "role": "Recruitment Team", "email": f"recruiting@{domain}", "pitch_type": "hr", "status": "pending"}
+    ]
 
 # --- Profile Load/Save Helpers ---
 PROFILE_FILE = "master_profile.json"
@@ -683,72 +826,44 @@ async def auto_apply(job_url: str, pdf_path: str, profile_data: str, job_id: int
             return f"Requires Intervention: automation failure."
 
 
-async def send_cold_email(company_name: str, job_description: str, resume_path: str, recruiter_email: str = None) -> str:
+async def send_cold_email(company_name: str, job_description: str, resume_path: str, recruiter_email: str = None, job_id: int = None) -> str:
     """
-    Draft highly technical pitch and email recruiter using Brevo's web API.
+    Draft highly technical pitches and email recruiters, founders, and co-founders using Brevo's web API.
     """
     import base64
-    log_message("Emailer", f"Drafting outreach pitch for recruiter at {company_name}...")
+    log_message("Emailer", f"Analyzing target contacts for {company_name}...")
     
-    if not recruiter_email:
-        domain = company_name.lower().replace(" ", "").replace(".", "") + ".com"
-        recruiter_email = f"recruiting@{domain}"
-        log_message("Emailer", f"Recruiter email guessed: {recruiter_email}")
+    # 1. Retrieve contacts from database if job_id is provided
+    targets = []
+    if job_id:
+        conn = get_db_connection()
+        row = db_execute(conn, "SELECT contacts FROM jobs WHERE id = %s", (job_id,)).fetchone()
+        conn.close()
+        if row and row["contacts"]:
+            try:
+                targets = json.loads(row["contacts"])
+            except Exception as e:
+                log_message("Emailer", f"Failed to parse contacts JSON: {str(e)}", "WARNING")
+                
+    if not targets:
+        if recruiter_email:
+            targets = [{"name": "Recruiter", "role": "Recruiter/Override", "email": recruiter_email, "pitch_type": "hr", "status": "pending"}]
+        else:
+            clean_company = company_name.lower().replace(" ", "").replace(".", "").replace("inc", "").replace("ltd", "").strip()
+            domain = f"{clean_company}.com"
+            targets = [
+                {"name": "Founder", "role": "Founder", "email": f"founder@{domain}", "pitch_type": "executive", "status": "pending"},
+                {"name": "Co-Founder", "role": "Co-Founder", "email": f"cofounder@{domain}", "pitch_type": "executive", "status": "pending"},
+                {"name": "HR Director", "role": "HR Director", "email": f"hr@{domain}", "pitch_type": "hr", "status": "pending"},
+                {"name": "Recruitment Team", "role": "Recruitment Team", "email": f"recruiting@{domain}", "pitch_type": "hr", "status": "pending"}
+            ]
 
-    subject = f"Cloud / Backend Engineering Inquiry - Aman Parab"
-    email_body = ""
-
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if api_key and api_key != "your_gemini_api_key_here":
-        try:
-            from google import genai
-            client = genai.Client(api_key=api_key)
-            prompt = f"""
-            Draft a highly technical cold outreach email as Aman Parab pitching skills.
-            Core skills: Python, Microsoft Azure, GitLab CI/CD, PostgreSQL, Linux, Machine Learning.
-            Company: {company_name}
-            Job details: {job_description[:400]}
-            
-            Email must:
-            - Be concise (max 3 short paragraphs).
-            - Focus on Azure VM deployment automation and Python ML backend projects.
-            - Reference attached resume.
-            
-            Return ONLY the subject line starting with 'Subject: ' on line 1, and the body starting on line 3.
-            """
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt
-            )
-            lines = response.text.strip().split("\n")
-            if lines[0].startswith("Subject:"):
-                subject = lines[0].replace("Subject:", "").strip()
-                email_body = "\n".join(lines[2:]).strip()
-            else:
-                email_body = response.text.strip()
-            log_message("Emailer", "Gemini custom email drafted.", "SUCCESS")
-        except Exception as e:
-            log_message("Emailer", f"Gemini draft failed: {str(e)}. Using fallback template.", "WARNING")
-
-    if not email_body:
-        email_body = f"""Dear Hiring Team at {company_name},
-
-I recently reviewed your backend infrastructure requirements and wanted to connect. I am a Backend and Cloud Systems Engineer with specialized expertise in Python backend architectures, Microsoft Azure VM automation, PostgreSQL databases, and GitLab CI/CD pipeline deployments.
-
-My work includes automating GitLab CI/CD workflows for deploying microservices onto Azure VMs, engineering real-time ML translation networks (CNNs), and constructing analytical PostgreSQL databases. I develop in Pop!_OS Linux and thrive on infrastructure automation.
-
-I have attached my tailored resume for your reference. I would welcome the opportunity to chat about how my automation and cloud engineering expertise aligns with {company_name}'s needs.
-
-Best regards,
-Aman Parab
-+91-9324101109 | amanparab007@gmail.com"""
-
-    # Check for Brevo API Key
+    # Check for Brevo configuration
     brevo_key = os.environ.get("BREVO_API_KEY", "your_brevo_api_key_here")
     sender_email = os.environ.get("SENDER_EMAIL", "amanparab007@gmail.com")
     sender_name = os.environ.get("SENDER_NAME", "Aman Parab")
 
-    # Attachment logic
+    # Encode resume PDF
     attachment = []
     pdf_abs_path = os.path.abspath(resume_path.lstrip("/"))
     if os.path.exists(pdf_abs_path):
@@ -759,44 +874,148 @@ Aman Parab
                 "content": pdf_b64,
                 "name": os.path.basename(pdf_abs_path)
             })
-            log_message("Emailer", f"Encoded resume for attachment.")
+            log_message("Emailer", f"Encoded tailored resume PDF successfully.")
         except Exception as e:
             log_message("Emailer", f"Failed to encode resume: {str(e)}", "WARNING")
+    else:
+        log_message("Emailer", f"Resume PDF not found at {pdf_abs_path}", "WARNING")
 
-    if brevo_key == "your_brevo_api_key_here" or not brevo_key:
-        log_message("Emailer", "[SANDBOX] Brevo API key not configured. Simulating dispatch.", "WARNING")
-        log_message("Emailer", f"Simulated Brevo Email sent to {recruiter_email}\nSubject: {subject}", "SUCCESS")
-        return "Emailed (Sandbox Mode): Email sent successfully."
+    api_key = os.environ.get("GEMINI_API_KEY")
+    dispatched_log = []
+    updated_targets = []
 
-    # Dispatch using HTTP POST to Brevo API
-    try:
-        url = "https://api.brevo.com/v3/smtp/email"
-        headers = {
-            "accept": "application/json",
-            "api-key": brevo_key,
-            "content-type": "application/json"
-        }
+    # Send personalized emails to each target contact
+    for target in targets:
+        # Skip if already sent successfully
+        if target.get("status") == "sent":
+            updated_targets.append(target)
+            dispatched_log.append(f"{target['role']} ({target['email']}) [Already Sent]")
+            continue
+            
+        target_email = target["email"]
+        target_role = target["role"]
+        pitch_type = target.get("pitch_type", "hr")
+        target_name = target.get("name", target_role)
         
-        payload = {
-            "sender": {"name": sender_name, "email": sender_email},
-            "to": [{"email": recruiter_email}],
-            "subject": subject,
-            "textContent": email_body
-        }
-        if attachment:
-            payload["attachment"] = attachment
+        subject = f"Cloud / Backend Engineering Inquiry - Aman Parab"
+        email_body = ""
+        
+        # 3. Draft customized emails based on target role
+        if api_key and api_key != "your_gemini_api_key_here":
+            try:
+                from google import genai
+                client = genai.Client(api_key=api_key)
+                
+                role_instructions = ""
+                if pitch_type == "executive":
+                    role_instructions = f"The recipient is a Founder/Co-Founder/Executive named {target_name}. Focus on high-level infrastructure scaling, cost optimization, and back-end efficiency. Make it brief and business-oriented."
+                else:
+                    role_instructions = f"The recipient is an HR Recruiter named {target_name}. Focus on skills alignment (Python, Azure, CI/CD, ML), project accomplishments, and prompt availability."
+                
+                prompt = f"""
+                You are Aman Parab. Write a brief technical cold email to the {target_role} ({target_name}) of {company_name}.
+                Core skills: Python, Microsoft Azure, GitLab CI/CD, PostgreSQL, Linux, Machine Learning.
+                Job description context: {job_description[:400]}
+                
+                Instructions:
+                - {role_instructions}
+                - Refer to the attached resume.
+                - Max 3 short paragraphs.
+                
+                Return ONLY the subject line starting with 'Subject: ' on line 1, and the body starting on line 3.
+                """
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt
+                )
+                lines = response.text.strip().split("\n")
+                if lines[0].startswith("Subject:"):
+                    subject = lines[0].replace("Subject:", "").strip()
+                    email_body = "\n".join(lines[2:]).strip()
+                else:
+                    email_body = response.text.strip()
+            except Exception as e:
+                log_message("Emailer", f"Gemini draft failed for {target_role}: {str(e)}. Using standard fallback.", "WARNING")
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(url, headers=headers, json=payload)
-            if response.status_code in [200, 201, 202]:
-                log_message("Emailer", f"Email dispatched via Brevo API successfully to {recruiter_email}.", "SUCCESS")
-                return "Emailed successfully."
+        if not email_body:
+            # Fallbacks
+            if pitch_type == "executive":
+                email_body = f"""Dear {target_name},
+
+I wanted to reach out regarding backend engineering at {company_name}. I am a Cloud Systems and Backend Developer specializing in Python architectures, Microsoft Azure VM automation, PostgreSQL databases, and GitLab CI/CD pipelines.
+
+I focus on infrastructure-as-code automation and robust backend services. I develop in Pop!_OS Linux and love building high-performance systems.
+
+My resume is attached. I would appreciate 10 minutes to discuss how my automation and cloud scaling expertise can benefit {company_name}.
+
+Best regards,
+Aman Parab
++91-9324101109 | amanparab007@gmail.com"""
             else:
-                log_message("Emailer", f"Brevo API error (Status {response.status_code}): {response.text}", "ERROR")
-                return f"Failed: Brevo API error ({response.status_code})."
-    except Exception as e:
-        log_message("Emailer", f"Brevo API request failed: {str(e)}", "ERROR")
-        return f"Failed: Brevo API connection error."
+                email_body = f"""Dear {target_name},
+
+I recently reviewed your backend engineering initiatives and wanted to connect. I am a Backend and Cloud Systems Engineer with specialized expertise in Python backend architectures, Microsoft Azure VM automation, PostgreSQL databases, and GitLab CI/CD pipeline deployments.
+
+My work includes automating GitLab CI/CD workflows for deploying microservices onto Azure VMs, engineering real-time ML translation networks (CNNs), and constructing analytical PostgreSQL databases. 
+
+I've attached my tailored resume for your reference. I would welcome the opportunity to chat about how my automation and cloud engineering credentials align with {company_name}'s open roles.
+
+Best regards,
+Aman Parab
++91-9324101109 | amanparab007@gmail.com"""
+
+        # 4. Dispatch
+        if brevo_key == "your_brevo_api_key_here" or not brevo_key:
+            log_message("Emailer", f"[SANDBOX] Simulating Brevo email dispatch to {target_role} ({target_email})...")
+            log_message("Emailer", f"Mock Sent -> To: {target_email} | Subject: {subject}", "SUCCESS")
+            target["status"] = "sent"
+            dispatched_log.append(f"{target_role} ({target_email})")
+            updated_targets.append(target)
+            continue
+
+        try:
+            url = "https://api.brevo.com/v3/smtp/email"
+            headers = {
+                "accept": "application/json",
+                "api-key": brevo_key,
+                "content-type": "application/json"
+            }
+            
+            payload = {
+                "sender": {"name": sender_name, "email": sender_email},
+                "to": [{"email": target_email}],
+                "subject": subject,
+                "textContent": email_body
+            }
+            if attachment:
+                payload["attachment"] = attachment
+
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                if response.status_code in [200, 201, 202]:
+                    log_message("Emailer", f"Email successfully sent to {target_role} ({target_email}) via Brevo API.", "SUCCESS")
+                    target["status"] = "sent"
+                    dispatched_log.append(f"{target_role} ({target_email})")
+                else:
+                    log_message("Emailer", f"Brevo API error for {target_role} (Status {response.status_code}): {response.text}", "ERROR")
+                    target["status"] = "failed"
+        except Exception as e:
+            log_message("Emailer", f"Brevo API request failed for {target_role}: {str(e)}", "ERROR")
+            target["status"] = "failed"
+            
+        updated_targets.append(target)
+
+    # 5. Write updated contacts back to database if job_id is provided
+    if job_id:
+        conn = get_db_connection()
+        db_execute(conn, "UPDATE jobs SET contacts = %s WHERE id = %s", (json.dumps(updated_targets), job_id))
+        conn.commit()
+        conn.close()
+
+    if dispatched_log:
+        return f"Outreach successfully sent to: {', '.join(dispatched_log)}"
+    else:
+        return "Failed: No outreach emails could be successfully sent."
 
 # --- Background PTA Orchestrator Loop ---
 
@@ -847,6 +1066,14 @@ async def run_local_pipeline_step():
         if score >= 70:
             update_job_status(job_id, "Tailored")
             log_message("AgentLoop", f"Job ID {job_id} scored {score}% and was promoted to 'Tailored'.", "SUCCESS")
+            try:
+                contacts = await get_or_generate_contacts(job["company"], job["description"])
+                conn = get_db_connection()
+                db_execute(conn, "UPDATE jobs SET contacts = %s WHERE id = %s", (json.dumps(contacts), job_id))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                log_message("AgentLoop", f"Failed to populate contacts for Job ID {job_id}: {str(e)}", "WARNING")
         else:
             update_job_status(job_id, "Archived")
             log_message("AgentLoop", f"Job ID {job_id} scored {score}%. Marked as Archived.", "INFO")
@@ -892,10 +1119,10 @@ async def run_local_pipeline_step():
 
     for job in applied_jobs:
         job_id = job["id"]
-        email_res = await send_cold_email(job["company"], job["description"], job["resume_path"])
+        email_res = await send_cold_email(job["company"], job["description"], job["resume_path"], job_id=job_id)
         log_message("AgentLoop", f"Job ID {job_id} Outreach: {email_res}")
         
-        if "Emailed" in email_res or "successfully" in email_res:
+        if "successfully" in email_res or "Sent" in email_res:
             update_job_status(job_id, "Emailed")
             
         # Rate-limiting delay
@@ -996,6 +1223,60 @@ async def patch_job_status(job_id: int, data: StatusUpdate):
     update_job_status(job_id, data.status)
     log_message("WebAPI", f"Job ID {job_id} status updated to '{data.status}' manually.")
     return {"status": "success", "message": f"Updated status of Job {job_id}"}
+
+@app.get("/api/jobs/{job_id}/contacts")
+async def get_job_contacts(job_id: int):
+    conn = get_db_connection()
+    row = db_execute(conn, "SELECT contacts, company, description FROM jobs WHERE id = %s", (job_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    contacts_str = row["contacts"]
+    if not contacts_str:
+        contacts = await get_or_generate_contacts(row["company"], row["description"])
+        conn = get_db_connection()
+        db_execute(conn, "UPDATE jobs SET contacts = %s WHERE id = %s", (json.dumps(contacts), job_id))
+        conn.commit()
+        conn.close()
+        return contacts
+        
+    try:
+        return json.loads(contacts_str)
+    except Exception as e:
+        return []
+
+class ContactsUpdate(BaseModel):
+    contacts: list
+
+@app.post("/api/jobs/{job_id}/contacts")
+async def update_job_contacts(job_id: int, data: ContactsUpdate):
+    conn = get_db_connection()
+    db_execute(conn, "UPDATE jobs SET contacts = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s", (json.dumps(data.contacts), job_id))
+    conn.commit()
+    conn.close()
+    log_message("WebAPI", f"Contacts updated for Job ID {job_id} manually.")
+    return {"status": "success", "message": "Contacts updated successfully"}
+
+@app.post("/api/jobs/{job_id}/outreach")
+async def trigger_outreach(job_id: int):
+    conn = get_db_connection()
+    job = db_execute(conn, "SELECT * FROM jobs WHERE id = %s", (job_id,)).fetchone()
+    conn.close()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    if not job["resume_path"]:
+        raise HTTPException(status_code=400, detail="Tailored resume does not exist. Please generate/upload one first.")
+        
+    log_message("WebAPI", f"Manually triggering cold outreach for Job ID {job_id} ({job['company']})...")
+    email_res = await send_cold_email(job["company"], job["description"], job["resume_path"], job_id=job_id)
+    
+    if "successfully" in email_res or "Sent" in email_res:
+        update_job_status(job_id, "Emailed")
+        return {"status": "success", "message": email_res}
+    else:
+        return {"status": "error", "message": email_res}
 
 @app.get("/api/profile")
 async def get_profile():

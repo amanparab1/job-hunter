@@ -12,11 +12,11 @@
 
   <div class="app-container">
     
-    <!-- Premium Header -->
+    <!-- LinkedIn-Style Header -->
     <header id="app-header">
       <div class="brand-section">
-        <h1 id="brand-title">ANTIGRAVITY JOB HUNTER</h1>
-        <p id="brand-tagline">Automated discovery, match evaluation, resume tailoring, auto-applying, and cold outreach</p>
+        <h1 id="brand-title">JOB HUNTER CO-PILOT</h1>
+        <p id="brand-tagline">Automated discovery, evaluation, resume tailoring, auto-applying, and executive outreach</p>
       </div>
       <div class="status-badge-container">
         <div class="loop-status" id="loop-status-indicator">
@@ -42,6 +42,28 @@
         >
         <button type="submit" class="omnibar-button" id="btn-omnibar-submit">Update Profile</button>
       </form>
+    </section>
+
+    <!-- Resume Upload Section -->
+    <section class="omnibar-container" id="resume-upload-section" style="margin-top: -1rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+        <div class="omnibar-label">
+          <i class="fas fa-file-upload"></i>
+          <span>Global Resume Override</span>
+        </div>
+        <div id="resume-status-badge" style="font-size: 0.85rem; font-weight: 600; padding: 0.25rem 0.75rem; border-radius: 50px; background: rgba(10, 102, 194, 0.1); border: 1px solid rgba(10, 102, 194, 0.2); color: var(--linkedin-blue);">
+          Active: Dynamic Tailored Resumes
+        </div>
+      </div>
+      <div class="omnibar-form" style="align-items: center; gap: 1rem;">
+        <label for="resume-file-input" class="btn-card" style="flex-grow: 1; padding: 0.75rem 1.25rem; font-size: 0.95rem; cursor: pointer; text-align: left; display: flex; justify-content: space-between; border-style: dashed; border-color: rgba(0,0,0,0.15); background: rgba(0,0,0,0.02);">
+          <span id="file-label-text">Select fresh static resume PDF to use globally...</span>
+          <i class="fas fa-search" style="color: var(--linkedin-blue);"></i>
+        </label>
+        <input type="file" id="resume-file-input" accept=".pdf" style="display: none;">
+        <button type="button" class="omnibar-button" id="btn-resume-upload" style="padding: 0.75rem 1.5rem; background: var(--linkedin-blue); height: 42px;">Upload</button>
+        <button type="button" class="btn-card" id="btn-resume-delete" style="padding: 0.75rem 1.5rem; color: var(--accent-red); border-color: var(--accent-red); display: none; height: 42px;">Delete Static Resume</button>
+      </div>
     </section>
 
     <!-- Kanban Board Grid -->
@@ -118,32 +140,34 @@
         </div>
       </div>
 
-      <!-- Profile Quick View -->
+      <!-- Profile Quick View Redesigned -->
       <div class="profile-card" id="profile-quickview">
         <div class="profile-card-header">
           <span><i class="fas fa-user-tie"></i> Profile Database Quick-View</span>
         </div>
-        <div class="profile-section">
-          <span class="profile-section-title">Aman Parab</span>
-          <div style="font-size: 0.85rem; color: var(--color-text-muted); margin-top: 0.25rem;">
-            <i class="fas fa-envelope"></i> amanparab007@gmail.com | <i class="fas fa-phone"></i> +91-9324101109
+        <div class="profile-body-container">
+          <div class="profile-section">
+            <span class="profile-section-title">Aman Parab</span>
+            <div style="font-size: 0.85rem; color: var(--color-text-muted); margin-top: 0.25rem;">
+              <i class="fas fa-envelope"></i> amanparab007@gmail.com | <i class="fas fa-phone"></i> +91-9324101109
+            </div>
+            <div style="font-size: 0.85rem; color: var(--color-text-muted);">
+              <i class="fas fa-graduation-cap"></i> B.E. IT, Xavier Institute of Engineering (CGPA: 7.88)
+            </div>
           </div>
-          <div style="font-size: 0.85rem; color: var(--color-text-muted);">
-            <i class="fas fa-graduation-cap"></i> B.E. IT, Xavier Institute of Engineering (CGPA: 7.88)
+          
+          <div class="profile-section">
+            <span class="profile-section-title">Core Skills</span>
+            <div class="skills-tags" id="profile-skills">
+              <!-- Loaded dynamically -->
+            </div>
           </div>
-        </div>
-        
-        <div class="profile-section">
-          <span class="profile-section-title">Core Skills</span>
-          <div class="skills-tags" id="profile-skills">
-            <!-- Loaded dynamically -->
-          </div>
-        </div>
 
-        <div class="profile-section">
-          <span class="profile-section-title">Projects</span>
-          <div id="profile-projects">
-            <!-- Loaded dynamically -->
+          <div class="profile-section">
+            <span class="profile-section-title">Projects</span>
+            <div id="profile-projects">
+              <!-- Loaded dynamically -->
+            </div>
           </div>
         </div>
       </div>
@@ -181,5 +205,55 @@
     </div>
   </div>
 
+  <!-- Contacts Manager Modal -->
+  <div class="modal" id="contacts-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title" id="contacts-modal-title">Outreach Contacts</h2>
+        <button class="modal-close" id="contacts-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.85rem; color: var(--color-text-muted); margin-bottom: 0.25rem;">
+          These contacts are targeted for personalized cold emails with your tailored resume. You can edit email addresses, add specific names, or add custom contacts.
+        </p>
+        
+        <div class="contacts-table-container">
+          <table class="contacts-table">
+            <thead>
+              <tr>
+                <th style="width: 25%;">Name</th>
+                <th style="width: 20%;">Role</th>
+                <th style="width: 35%;">Email</th>
+                <th style="width: 15%;">Status</th>
+                <th style="width: 5%; text-align: center;"></th>
+              </tr>
+            </thead>
+            <tbody id="contacts-table-body">
+              <!-- Loaded dynamically -->
+            </tbody>
+          </table>
+        </div>
+        
+        <div class="add-contact-form">
+          <div class="add-contact-title">Add New Outreach Contact</div>
+          <input type="text" class="contacts-input" id="new-contact-name" placeholder="Name (e.g. John Doe)">
+          <input type="text" class="contacts-input" id="new-contact-role" placeholder="Role (e.g. CTO)">
+          <input type="email" class="contacts-input" id="new-contact-email" placeholder="Email (e.g. john@...)">
+          <button type="button" class="btn-add-contact" id="btn-add-contact-submit">
+            <i class="fas fa-plus"></i>
+          </button>
+        </div>
+        
+        <div class="modal-actions">
+          <button class="btn-modal btn-modal-cancel" id="btn-contacts-modal-close">Close</button>
+          <button class="btn-modal btn-modal-action" id="btn-send-outreach-submit">
+            <i class="fas fa-paper-plane"></i> Send Cold Emails Now
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/script.js"></script>
 </body>
 </html>

@@ -29,6 +29,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnModalCancel = document.getElementById('btn-modal-cancel');
   const btnModalAction = document.getElementById('btn-modal-action');
   
+  // Contacts Modal Elements
+  const contactsModal = document.getElementById('contacts-modal');
+  const contactsModalClose = document.getElementById('contacts-modal-close');
+  const btnContactsModalClose = document.getElementById('btn-contacts-modal-close');
+  const contactsTableBody = document.getElementById('contacts-table-body');
+  const btnAddContactSubmit = document.getElementById('btn-add-contact-submit');
+  const btnSendOutreachSubmit = document.getElementById('btn-send-outreach-submit');
+  
+  let currentContactsJobId = null;
+  let currentContactsList = [];
+  
   // Profile Elements
   const profileSkills = document.getElementById('profile-skills');
   const profileProjects = document.getElementById('profile-projects');
@@ -39,6 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function init() {
     loadJobs();
     loadProfile();
+    loadResumeStatus();
     setupDragAndDrop();
     setupEventListeners();
     
@@ -208,8 +220,27 @@ document.addEventListener('DOMContentLoaded', () => {
       overlay.textContent = 'Resolve';
       thumb.appendChild(overlay);
 
-      thumb.addEventListener('click', () => openInterventionModal(job));
+      thumb.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openInterventionModal(job);
+      });
       card.appendChild(thumb);
+    }
+
+    // Contacts Summary Badge
+    if (job.status === 'Tailored' || job.status === 'Applied' || job.status === 'Emailed' || job.status === 'Requires Intervention') {
+      const contactsBadge = document.createElement('div');
+      contactsBadge.className = 'contacts-badge';
+      
+      let contactList = [];
+      try {
+        contactList = job.contacts ? JSON.parse(job.contacts) : [];
+      } catch(e) {}
+      
+      const total = contactList.length;
+      const sent = contactList.filter(c => c.status === 'sent').length;
+      contactsBadge.innerHTML = `<i class="fas fa-users" style="color: var(--linkedin-blue);"></i> Contacts: ${total} (${sent} sent)`;
+      card.appendChild(contactsBadge);
     }
 
     // Action buttons depending on state
@@ -229,14 +260,28 @@ document.addEventListener('DOMContentLoaded', () => {
     btnLink.className = 'btn-card';
     btnLink.href = job.url;
     btnLink.target = '_blank';
-    btnLink.innerHTML = '<i class="fas fa-external-link-alt"></i> Job link';
+    btnLink.innerHTML = '<i class="fas fa-external-link-alt"></i> Link';
     actions.appendChild(btnLink);
+
+    if (job.status === 'Tailored' || job.status === 'Applied' || job.status === 'Emailed' || job.status === 'Requires Intervention') {
+      const btnOutreach = document.createElement('button');
+      btnOutreach.className = 'btn-card btn-card-primary';
+      btnOutreach.innerHTML = '<i class="fas fa-paper-plane"></i> Outreach';
+      btnOutreach.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openContactsModal(job);
+      });
+      actions.appendChild(btnOutreach);
+    }
 
     if (job.status === 'Requires Intervention') {
       const btnResolve = document.createElement('button');
       btnResolve.className = 'btn-card btn-card-primary';
       btnResolve.innerHTML = '<i class="fas fa-tools"></i> Fix';
-      btnResolve.addEventListener('click', () => openInterventionModal(job));
+      btnResolve.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openInterventionModal(job);
+      });
       actions.appendChild(btnResolve);
     }
 
@@ -349,9 +394,93 @@ document.addEventListener('DOMContentLoaded', () => {
     modalClose.addEventListener('click', () => { modal.style.display = 'none'; });
     btnModalCancel.addEventListener('click', () => { modal.style.display = 'none'; });
     
+    // Contacts Modal Close
+    const closeAndSaveContacts = async () => {
+      if (currentContactsJobId && currentContactsList) {
+        try {
+          await fetch(`${API_BASE}/api/jobs/${currentContactsJobId}/contacts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contacts: currentContactsList })
+          });
+        } catch (err) {
+          console.error("Auto-saving contacts failed:", err);
+        }
+      }
+      contactsModal.style.display = 'none';
+      loadJobs();
+    };
+
+    contactsModalClose.addEventListener('click', closeAndSaveContacts);
+    btnContactsModalClose.addEventListener('click', closeAndSaveContacts);
+    
     // Close modal on click outside
     window.addEventListener('click', (e) => {
       if (e.target === modal) modal.style.display = 'none';
+      if (e.target === contactsModal) closeAndSaveContacts();
+    });
+
+    // Resume Override elements
+    const resumeFileInput = document.getElementById('resume-file-input');
+    const btnResumeUpload = document.getElementById('btn-resume-upload');
+    const btnResumeDelete = document.getElementById('btn-resume-delete');
+    const fileLabel = document.getElementById('file-label-text');
+
+    resumeFileInput.addEventListener('change', () => {
+      if (resumeFileInput.files.length > 0) {
+        fileLabel.textContent = `Selected: ${resumeFileInput.files[0].name}`;
+      } else {
+        fileLabel.textContent = 'Select fresh static resume PDF to use globally...';
+      }
+    });
+
+    btnResumeUpload.addEventListener('click', async () => {
+      if (resumeFileInput.files.length === 0) {
+        showLog('System', 'No PDF file selected to upload', 'warning');
+        return;
+      }
+      
+      const file = resumeFileInput.files[0];
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      showLog('System', `Uploading default resume: ${file.name}...`, 'info');
+      
+      try {
+        const response = await fetch(`${API_BASE}/api/resume/upload`, {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.detail || 'Upload failed');
+        }
+        
+        showLog('System', 'Default resume uploaded successfully! Reverted to static mode.', 'success');
+        resumeFileInput.value = '';
+        loadResumeStatus();
+      } catch (error) {
+        console.error('Upload error:', error);
+        showLog('System', `Upload failed: ${error.message}`, 'error');
+      }
+    });
+
+    btnResumeDelete.addEventListener('click', async () => {
+      showLog('System', 'Deleting static resume override...', 'info');
+      try {
+        const response = await fetch(`${API_BASE}/api/resume`, {
+          method: 'DELETE'
+        });
+        
+        if (!response.ok) throw new Error('Deletion failed');
+        
+        showLog('System', 'Static resume override removed. Reverted to Dynamic Tailored Resumes.', 'success');
+        loadResumeStatus();
+      } catch (error) {
+        console.error('Delete error:', error);
+        showLog('System', `Deletion failed: ${error.message}`, 'error');
+      }
     });
   }
 
@@ -443,6 +572,220 @@ document.addEventListener('DOMContentLoaded', () => {
       terminalBody.removeChild(terminalBody.firstChild);
     }
   }
+
+  async function loadResumeStatus() {
+    try {
+      const response = await fetch(`${API_BASE}/api/resume/status`);
+      if (!response.ok) throw new Error('Failed to fetch resume status');
+      const status = await response.json();
+      
+      const badge = document.getElementById('resume-status-badge');
+      const btnDelete = document.getElementById('btn-resume-delete');
+      const fileLabel = document.getElementById('file-label-text');
+      
+      if (status.has_default) {
+        badge.textContent = 'Active: Static Resume (default_resume.pdf)';
+        badge.style.background = 'rgba(5, 118, 66, 0.1)';
+        badge.style.borderColor = 'rgba(5, 118, 66, 0.2)';
+        badge.style.color = '#057642';
+        btnDelete.style.display = 'block';
+        fileLabel.textContent = 'default_resume.pdf is active. Click to select a new one...';
+      } else {
+        badge.textContent = 'Active: Dynamic Tailored Resumes';
+        badge.style.background = 'rgba(10, 102, 194, 0.1)';
+        badge.style.borderColor = 'rgba(10, 102, 194, 0.2)';
+        badge.style.color = '#0a66c2';
+        btnDelete.style.display = 'none';
+        fileLabel.textContent = 'Select fresh static resume PDF to use globally...';
+      }
+    } catch (error) {
+      console.error('Error loading resume status:', error);
+    }
+  }
+
+  // Open Outreach Contacts Modal
+  async function openContactsModal(job) {
+    currentContactsJobId = job.id;
+    currentContactsList = [];
+    
+    // Set title
+    document.getElementById('contacts-modal-title').textContent = `Outreach Contacts - ${job.company}`;
+    
+    // Clear add contact inputs
+    document.getElementById('new-contact-name').value = '';
+    document.getElementById('new-contact-role').value = '';
+    document.getElementById('new-contact-email').value = '';
+    
+    // Show spinner or placeholder in table
+    contactsTableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 1.5rem;"><i class="fas fa-spinner fa-spin"></i> Loading contacts...</td></tr>';
+    
+    contactsModal.style.display = 'flex';
+    
+    try {
+      const response = await fetch(`${API_BASE}/api/jobs/${job.id}/contacts`);
+      if (!response.ok) throw new Error('Failed to fetch contacts');
+      currentContactsList = await response.json();
+      renderContactsTable();
+    } catch (error) {
+      console.error("Fetch contacts error:", error);
+      contactsTableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 1.5rem; color: var(--accent-red);">Failed to load contacts.</td></tr>';
+    }
+  }
+
+  function renderContactsTable() {
+    contactsTableBody.innerHTML = '';
+    
+    if (currentContactsList.length === 0) {
+      contactsTableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 1.5rem; color: var(--color-text-muted);">No contacts configured. Use the form below to add one.</td></tr>';
+      return;
+    }
+    
+    currentContactsList.forEach((contact, index) => {
+      const tr = document.createElement('tr');
+      
+      // Name
+      const tdName = document.createElement('td');
+      const inputName = document.createElement('input');
+      inputName.type = 'text';
+      inputName.className = 'contacts-input';
+      inputName.value = contact.name || '';
+      inputName.addEventListener('change', (e) => {
+        currentContactsList[index].name = e.target.value;
+      });
+      tdName.appendChild(inputName);
+      tr.appendChild(tdName);
+      
+      // Role
+      const tdRole = document.createElement('td');
+      const inputRole = document.createElement('input');
+      inputRole.type = 'text';
+      inputRole.className = 'contacts-input';
+      inputRole.value = contact.role || '';
+      inputRole.addEventListener('change', (e) => {
+        currentContactsList[index].role = e.target.value;
+      });
+      tdRole.appendChild(inputRole);
+      tr.appendChild(tdRole);
+      
+      // Email
+      const tdEmail = document.createElement('td');
+      const inputEmail = document.createElement('input');
+      inputEmail.type = 'email';
+      inputEmail.className = 'contacts-input';
+      inputEmail.value = contact.email || '';
+      inputEmail.addEventListener('change', (e) => {
+        currentContactsList[index].email = e.target.value;
+      });
+      tdEmail.appendChild(inputEmail);
+      tr.appendChild(tdEmail);
+      
+      // Status
+      const tdStatus = document.createElement('td');
+      const badge = document.createElement('span');
+      badge.className = `contact-status status-${contact.status || 'pending'}`;
+      badge.textContent = contact.status || 'pending';
+      tdStatus.appendChild(badge);
+      tr.appendChild(tdStatus);
+      
+      // Delete Button
+      const tdAction = document.createElement('td');
+      tdAction.style.textAlign = 'center';
+      const btnDelete = document.createElement('button');
+      btnDelete.className = 'btn-delete-contact';
+      btnDelete.innerHTML = '<i class="fas fa-trash-alt"></i>';
+      btnDelete.title = 'Delete Contact';
+      btnDelete.addEventListener('click', () => {
+        currentContactsList.splice(index, 1);
+        renderContactsTable();
+      });
+      tdAction.appendChild(btnDelete);
+      tr.appendChild(tdAction);
+      
+      contactsTableBody.appendChild(tr);
+    });
+  }
+
+  // Add contact listener
+  btnAddContactSubmit.addEventListener('click', () => {
+    const nameInput = document.getElementById('new-contact-name');
+    const roleInput = document.getElementById('new-contact-role');
+    const emailInput = document.getElementById('new-contact-email');
+    
+    const name = nameInput.value.trim();
+    const role = roleInput.value.trim();
+    const email = emailInput.value.trim();
+    
+    if (!email) {
+      showLog('System', 'Email address is required to add contact.', 'warning');
+      return;
+    }
+    
+    // Add to list
+    const isExecutive = ['founder', 'co-founder', 'ceo', 'cto', 'president', 'vp', 'director'].some(w => role.toLowerCase().includes(w));
+    currentContactsList.push({
+      name: name || role,
+      role: role || 'Recruiter',
+      email: email,
+      pitch_type: isExecutive ? 'executive' : 'hr',
+      status: 'pending'
+    });
+    
+    // Clear inputs
+    nameInput.value = '';
+    roleInput.value = '';
+    emailInput.value = '';
+    
+    // Re-render
+    renderContactsTable();
+  });
+
+  // Send outreach listener
+  btnSendOutreachSubmit.addEventListener('click', async () => {
+    if (!currentContactsJobId) return;
+    
+    // 1. Save contacts list to server first to persist modifications
+    try {
+      await fetch(`${API_BASE}/api/jobs/${currentContactsJobId}/contacts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contacts: currentContactsList })
+      });
+    } catch(err) {
+      console.error("Saving contacts failed before outreach:", err);
+    }
+    
+    // 2. Trigger outreach
+    btnSendOutreachSubmit.disabled = true;
+    btnSendOutreachSubmit.innerHTML = '<span class="spinner"></span> Sending Emails...';
+    showLog('Emailer', `Starting outreach process for Job ID ${currentContactsJobId}...`, 'info');
+    
+    try {
+      const response = await fetch(`${API_BASE}/api/jobs/${currentContactsJobId}/outreach`, {
+        method: 'POST'
+      });
+      const data = await response.json();
+      
+      if (response.ok && data.status === 'success') {
+        showLog('Emailer', `Outreach successful: ${data.message}`, 'success');
+      } else {
+        showLog('Emailer', `Outreach completed with issues: ${data.message}`, 'warning');
+      }
+      
+      // Re-fetch contacts to update table statuses
+      const getRes = await fetch(`${API_BASE}/api/jobs/${currentContactsJobId}/contacts`);
+      if (getRes.ok) {
+        currentContactsList = await getRes.json();
+        renderContactsTable();
+      }
+      
+    } catch(error) {
+      console.error("Outreach error:", error);
+      showLog('Emailer', `Outreach request failed: ${error.message}`, 'error');
+    } finally {
+      btnSendOutreachSubmit.disabled = false;
+      btnSendOutreachSubmit.innerHTML = '<i class="fas fa-paper-plane"></i> Send Cold Emails Now';
+    }
+  });
 
   // Helper to log locally in terminal if server is slow
   function showLog(module, message, level = 'info') {
