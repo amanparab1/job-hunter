@@ -49,46 +49,142 @@ def log_message(module: str, message: str, level: str = "INFO"):
     print(f"[{module}] [{level}] {message}")
 
 # --- Database Setup & Helpers ---
-DATABASE = "job_tracker.db"
+USE_POSTGRES = os.getenv("USE_POSTGRES", "true").lower() == "true"
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "job_hunter")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
 
 def get_db_connection():
-    conn = sqlite3.connect(DATABASE)
+    if USE_POSTGRES:
+        try:
+            import psycopg2
+            import psycopg2.extras
+            conn = psycopg2.connect(
+                host=DB_HOST,
+                port=DB_PORT,
+                database=DB_NAME,
+                user=DB_USER,
+                password=DB_PASSWORD
+            )
+            return conn
+        except Exception as e:
+            # If the database does not exist, we try to create it automatically
+            if "database" in str(e) and DB_NAME in str(e):
+                log_message("Database", f"PostgreSQL database '{DB_NAME}' not found. Attempting to create it...", "WARNING")
+                try:
+                    import psycopg2
+                    temp_conn = psycopg2.connect(
+                        host=DB_HOST,
+                        port=DB_PORT,
+                        database="postgres",
+                        user=DB_USER,
+                        password=DB_PASSWORD
+                    )
+                    temp_conn.autocommit = True
+                    with temp_conn.cursor() as cursor:
+                        cursor.execute(f"CREATE DATABASE {DB_NAME}")
+                    temp_conn.close()
+                    log_message("Database", f"Created database '{DB_NAME}' in PostgreSQL.", "SUCCESS")
+                    
+                    conn = psycopg2.connect(
+                        host=DB_HOST,
+                        port=DB_PORT,
+                        database=DB_NAME,
+                        user=DB_USER,
+                        password=DB_PASSWORD
+                    )
+                    return conn
+                except Exception as ex:
+                    log_message("Database", f"Failed to create postgres database '{DB_NAME}': {str(ex)}. Falling back to SQLite.", "ERROR")
+            else:
+                log_message("Database", f"PostgreSQL connection failed: {str(e)}. Falling back to SQLite.", "ERROR")
+            
+    # SQLite Fallback
+    import sqlite3
+    conn = sqlite3.connect("job_tracker.db")
     conn.row_factory = sqlite3.Row
     return conn
 
+def is_postgres(conn):
+    return type(conn).__module__.startswith("psycopg2")
+
+def db_execute(conn, query, params=()):
+    """
+    Executes a query supporting both SQLite and PostgreSQL.
+    Converts %s placeholders to ? placeholders if connection is SQLite.
+    """
+    import sqlite3
+    if not is_postgres(conn):
+        query = query.replace("%s", "?")
+        # For INSERT OR IGNORE in SQLite
+        if "ON CONFLICT" in query:
+            import re
+            query = re.sub(r"ON CONFLICT\s*\(.*?\)\s*DO\s*NOTHING", "", query, flags=re.IGNORECASE)
+            query = re.sub(r"INSERT\s+INTO", "INSERT OR IGNORE INTO", query, flags=re.IGNORECASE)
+            
+    if is_postgres(conn):
+        import psycopg2.extras
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    else:
+        cur = conn.cursor()
+        
+    cur.execute(query, params)
+    return cur
+
 def init_db():
-    log_message("Database", "Initializing SQLite Database...")
     conn = get_db_connection()
-    conn.execute('''
-    CREATE TABLE IF NOT EXISTS jobs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        company TEXT NOT NULL,
-        description TEXT,
-        url TEXT UNIQUE,
-        location TEXT,
-        match_score INTEGER,
-        match_reason TEXT,
-        resume_path TEXT,
-        status TEXT NOT NULL,
-        screenshot_path TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
+    if is_postgres(conn):
+        log_message("Database", "Initializing PostgreSQL Database...")
+        db_execute(conn, '''
+        CREATE TABLE IF NOT EXISTS jobs (
+            id SERIAL PRIMARY KEY,
+            title VARCHAR(255) NOT NULL,
+            company VARCHAR(255) NOT NULL,
+            description TEXT,
+            url TEXT UNIQUE,
+            location VARCHAR(255),
+            match_score INTEGER,
+            match_reason TEXT,
+            resume_path TEXT,
+            status VARCHAR(50) NOT NULL,
+            screenshot_path TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+    else:
+        log_message("Database", "Initializing SQLite Database...")
+        db_execute(conn, '''
+        CREATE TABLE IF NOT EXISTS jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            company TEXT NOT NULL,
+            description TEXT,
+            url TEXT UNIQUE,
+            location TEXT,
+            match_score INTEGER,
+            match_reason TEXT,
+            resume_path TEXT,
+            status TEXT NOT NULL,
+            screenshot_path TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
     conn.commit()
 
     # Prepopulate with dummy jobs if database is empty for visual showcase
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM jobs")
-    count = cursor.fetchone()[0]
+    cur = db_execute(conn, "SELECT COUNT(*) FROM jobs")
+    count = cur.fetchone()[0]
     if count == 0:
         log_message("Database", "Pre-populating database with initial sample jobs.")
         
         # Discovered Job
-        cursor.execute('''
+        db_execute(conn, '''
         INSERT INTO jobs (title, company, description, url, location, status)
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (url) DO NOTHING
         ''', (
             "DevOps Engineer", 
             "Microsoft", 
@@ -99,9 +195,9 @@ def init_db():
         ))
         
         # Requires Intervention Job with mock Captcha screenshot
-        cursor.execute('''
+        db_execute(conn, '''
         INSERT INTO jobs (title, company, description, url, location, status, match_score, match_reason, screenshot_path)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (url) DO NOTHING
         ''', (
             "Cloud Infrastructure Engineer", 
             "GitLab Inc.", 
@@ -132,25 +228,25 @@ def init_db():
 
 def update_job_status(job_id: int, status: str):
     conn = get_db_connection()
-    conn.execute("UPDATE jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (status, job_id))
+    db_execute(conn, "UPDATE jobs SET status = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s", (status, job_id))
     conn.commit()
     conn.close()
 
 def update_job_match(job_id: int, score: int, reason: str):
     conn = get_db_connection()
-    conn.execute("UPDATE jobs SET match_score = ?, match_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (score, reason, job_id))
+    db_execute(conn, "UPDATE jobs SET match_score = %s, match_reason = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s", (score, reason, job_id))
     conn.commit()
     conn.close()
 
 def update_job_resume(job_id: int, resume_path: str):
     conn = get_db_connection()
-    conn.execute("UPDATE jobs SET resume_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (resume_path, job_id))
+    db_execute(conn, "UPDATE jobs SET resume_path = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s", (resume_path, job_id))
     conn.commit()
     conn.close()
 
 def update_job_screenshot(job_id: int, screenshot_path: str):
     conn = get_db_connection()
-    conn.execute("UPDATE jobs SET screenshot_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (screenshot_path, job_id))
+    db_execute(conn, "UPDATE jobs SET screenshot_path = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s", (screenshot_path, job_id))
     conn.commit()
     conn.close()
 
@@ -712,7 +808,7 @@ async def run_local_pipeline_step():
 
     # 1. Scrape if Discovered count is low
     conn = get_db_connection()
-    disc_count = conn.execute("SELECT COUNT(*) FROM jobs WHERE status = 'Discovered'").fetchone()[0]
+    disc_count = db_execute(conn, "SELECT COUNT(*) FROM jobs WHERE status = 'Discovered'").fetchone()[0]
     conn.close()
 
     if disc_count < 2:
@@ -723,10 +819,9 @@ async def run_local_pipeline_step():
         conn = get_db_connection()
         ins_count = 0
         for j in scraped_jobs:
-            cur = conn.cursor()
-            cur.execute('''
-            INSERT OR IGNORE INTO jobs (title, company, description, url, location, status)
-            VALUES (?, ?, ?, ?, ?, ?)
+            cur = db_execute(conn, '''
+            INSERT INTO jobs (title, company, description, url, location, status)
+            VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (url) DO NOTHING
             ''', (j["title"], j["company"], j["description"], j["url"], j["location"], "Discovered"))
             if cur.rowcount > 0:
                 ins_count += 1
@@ -736,7 +831,7 @@ async def run_local_pipeline_step():
 
     # 2. Evaluate Discovered matches
     conn = get_db_connection()
-    discovered_jobs = conn.execute("SELECT * FROM jobs WHERE status = 'Discovered'").fetchall()
+    discovered_jobs = db_execute(conn, "SELECT * FROM jobs WHERE status = 'Discovered'").fetchall()
     conn.close()
 
     for job in discovered_jobs:
@@ -760,7 +855,7 @@ async def run_local_pipeline_step():
 
     # 3. Process Tailored applications
     conn = get_db_connection()
-    tailored_jobs = conn.execute("SELECT * FROM jobs WHERE status = 'Tailored'").fetchall()
+    tailored_jobs = db_execute(conn, "SELECT * FROM jobs WHERE status = 'Tailored'").fetchall()
     conn.close()
 
     for job in tailored_jobs:
@@ -792,7 +887,7 @@ async def run_local_pipeline_step():
 
     # 4. Dispatch cold outreach for Applied jobs
     conn = get_db_connection()
-    applied_jobs = conn.execute("SELECT * FROM jobs WHERE status = 'Applied'").fetchall()
+    applied_jobs = db_execute(conn, "SELECT * FROM jobs WHERE status = 'Applied'").fetchall()
     conn.close()
 
     for job in applied_jobs:
@@ -884,7 +979,8 @@ async def get_dashboard(request: Request):
 @app.get("/api/jobs")
 async def get_jobs():
     conn = get_db_connection()
-    jobs = conn.execute("SELECT * FROM jobs ORDER BY updated_at DESC").fetchall()
+    cur = db_execute(conn, "SELECT * FROM jobs ORDER BY updated_at DESC")
+    jobs = cur.fetchall()
     conn.close()
     return [dict(j) for j in jobs]
 
