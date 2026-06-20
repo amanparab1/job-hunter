@@ -199,11 +199,11 @@ def init_db():
         INSERT INTO jobs (title, company, description, url, location, status)
         VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (url) DO NOTHING
         ''', (
-            "Python Backend Intern", 
-            "Microsoft", 
-            "We are seeking a Python Backend Intern to join our Cloud Engineering team. You will write backend services, help automate deployment pipelines, and work with PostgreSQL databases. Training on Azure and GitLab CI/CD will be provided. Perfect for freshers or students.",
-            "https://careers.microsoft.com/jobs/devops-engineer-demo", 
-            "Redmond, WA (Hybrid)", 
+            "Python Developer Fresher", 
+            "Reliance Jio Infocomm", 
+            "We are seeking a Python Developer Fresher to join our core backend team in Mumbai. You will write high-performance APIs using FastAPI, assist in PostgreSQL schema optimization, and script CI/CD pipelines. This is a local fresher position in Mumbai, India.",
+            "https://careers.jio.com/jobs/python-developer-mumbai", 
+            "Mumbai, Maharashtra (On-site)", 
             "Discovered"
         ))
         
@@ -212,19 +212,19 @@ def init_db():
         INSERT INTO jobs (title, company, description, url, location, status, match_score, match_reason, screenshot_path, contacts)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (url) DO NOTHING
         ''', (
-            "Junior Cloud Engineer", 
-            "GitLab Inc.", 
-            "Join GitLab as a Junior Cloud Infrastructure Specialist! This entry-level role focuses on supporting our CI/CD pipelines, automating Linux environments, and deploying services. Python scripting and basic PostgreSQL familiarity is required.",
-            "https://about.gitlab.com/jobs/cloud-infra-demo", 
-            "Remote", 
+            "Software Engineer Intern", 
+            "WebEngage", 
+            "Join WebEngage in Mumbai as a Backend Software Engineer Intern! Help scale our user engagement and marketing automation platforms. You will write code in Python, debug PostgreSQL databases, and configure microservices deployments on Linux (Pop!_OS/Debian).",
+            "https://webengage.com/careers/se-intern-mumbai", 
+            "Mumbai, India (Hybrid)", 
             "Requires Intervention",
             92,
-            "Highly relevant projects. Strong matching skills: Python, GitLab CI/CD, Linux, PostgreSQL.",
+            "Matches Xavier Institute IT background. Relates to Python, PostgreSQL, and Linux scripting skills.",
             "/static/screenshots/captcha_job_sample.png",
             json.dumps([
-                {"name": "Sid Sijbrandij", "role": "Co-Founder & CEO", "email": "sid@gitlab.com", "pitch_type": "executive", "status": "pending"},
-                {"name": "Eric Johnson", "role": "VP of Engineering", "email": "eric@gitlab.com", "pitch_type": "technical", "status": "pending"},
-                {"name": "HR Recruitment", "role": "HR Recruiter", "email": "hr@gitlab.com", "pitch_type": "hr", "status": "pending"}
+                {"name": "Avlesh Singh", "role": "Co-Founder & CEO", "email": "avlesh@webengage.com", "pitch_type": "executive", "status": "pending"},
+                {"name": "Ankit Utreja", "role": "CTO", "email": "ankit@webengage.com", "pitch_type": "technical", "status": "pending"},
+                {"name": "HR Recruitment", "role": "HR Director", "email": "hr@webengage.com", "pitch_type": "hr", "status": "pending"}
             ])
         ))
         
@@ -402,6 +402,254 @@ async def get_or_generate_contacts(company_name: str, job_description: str) -> l
         {"name": "Recruitment Team", "role": "Recruitment Team", "email": f"recruiting@{domain}", "pitch_type": "hr", "status": "pending"}
     ]
 
+# --- Platform Credentials & Playwright Persistent Browser Session Helpers ---
+
+from playwright.async_api import async_playwright
+
+# Global locks and flags for cross-thread coordination
+browser_in_use = False
+browser_in_use_lock = threading.Lock()
+
+auth_lock = threading.Lock()
+platform_auth_status = {
+    "linkedin": "unknown",
+    "naukri": "unknown",
+    "indeed": "unknown"
+}
+
+active_2fa = {
+    "platform": None,         # "linkedin", "naukri", "indeed"
+    "screenshot_path": None,  # relative path for web view
+    "code": None,             # user submitted 2FA code
+    "status": "idle"          # "idle", "waiting", "submitted"
+}
+
+async def acquire_browser():
+    """Asynchronously acquires exclusive access to the browser session directory without blocking FastAPI's thread."""
+    while True:
+        with browser_in_use_lock:
+            global browser_in_use
+            if not browser_in_use:
+                browser_in_use = True
+                log_message("BrowserMgr", "Acquired persistent browser session lock.")
+                return True
+        await asyncio.sleep(1)
+
+def release_browser():
+    """Releases the browser session directory lock."""
+    with browser_in_use_lock:
+        global browser_in_use
+        browser_in_use = False
+        log_message("BrowserMgr", "Released persistent browser session lock.")
+
+async def get_persistent_context(p, headless=True):
+    """Launches Chromium with a persistent user data directory and anti-bot evasions."""
+    user_data_dir = os.path.abspath("playwright_session")
+    os.makedirs(user_data_dir, exist_ok=True)
+    
+    # Launch persistent context
+    context = await p.chromium.launch_persistent_context(
+        user_data_dir=user_data_dir,
+        headless=headless,
+        viewport={"width": 1280, "height": 800},
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-infobars"
+        ]
+    )
+    
+    # Inject evasion script to hide navigator.webdriver
+    await context.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+        });
+    """)
+    return context
+
+async def handle_2fa_verification(page, platform: str) -> Optional[str]:
+    """Captures a screenshot, sets 2FA waiting state, and polls until user submits a code or cancels."""
+    global active_2fa
+    screenshot_name = f"2fa_{platform}.png"
+    screenshot_path = os.path.join("static", "screenshots", screenshot_name)
+    
+    log_message("Auth", f"{platform.capitalize()} login requires 2FA or security challenge. Capturing screenshot...", "WARNING")
+    await page.screenshot(path=screenshot_path)
+    
+    with auth_lock:
+        active_2fa["platform"] = platform
+        active_2fa["screenshot_path"] = f"/static/screenshots/{screenshot_name}"
+        active_2fa["status"] = "waiting"
+        active_2fa["code"] = None
+        
+    # Poll until status changes
+    while True:
+        with auth_lock:
+            if active_2fa["status"] == "submitted":
+                code = active_2fa["code"]
+                # reset
+                active_2fa["status"] = "idle"
+                active_2fa["platform"] = None
+                active_2fa["screenshot_path"] = None
+                active_2fa["code"] = None
+                log_message("Auth", f"Received 2FA code from dashboard: {code}", "INFO")
+                return code
+            elif active_2fa["status"] == "idle":
+                # Aborted by user
+                log_message("Auth", f"2FA verification aborted for {platform.capitalize()}.", "WARNING")
+                return None
+        await asyncio.sleep(1)
+
+async def check_platform_login_status(platform: str) -> str:
+    """Checks if currently logged in to a platform by visiting its main feed or dashboard."""
+    await acquire_browser()
+    status = "requires_login"
+    async with async_playwright() as p:
+        try:
+            context = await get_persistent_context(p, headless=True)
+            page = await context.new_page()
+            
+            if platform == "linkedin":
+                await page.goto("https://www.linkedin.com/feed", timeout=20000, wait_until="domcontentloaded")
+                await asyncio.sleep(2)
+                if "/feed" in page.url:
+                    status = "logged_in"
+            elif platform == "naukri":
+                await page.goto("https://www.naukri.com/mnjuser/homepage", timeout=20000, wait_until="domcontentloaded")
+                await asyncio.sleep(2)
+                if "homepage" in page.url or "mnjuser" in page.url:
+                    status = "logged_in"
+            elif platform == "indeed":
+                await page.goto("https://profile.indeed.com/", timeout=20000, wait_until="domcontentloaded")
+                await asyncio.sleep(2)
+                if "secure.indeed.com" not in page.url:
+                    status = "logged_in"
+            
+            await context.close()
+        except Exception as e:
+            log_message("AuthStatus", f"Error checking {platform} status: {str(e)}", "WARNING")
+        finally:
+            release_browser()
+            
+    with auth_lock:
+        platform_auth_status[platform] = status
+    return status
+
+async def execute_platform_login(platform: str) -> bool:
+    """Automates the platform login steps. Prompts for 2FA if triggered."""
+    username = os.environ.get(f"{platform.upper()}_USERNAME")
+    password = os.environ.get(f"{platform.upper()}_PASSWORD")
+    
+    if not username or not password or "your_" in username:
+        log_message("Auth", f"No credentials configured in .env for {platform.capitalize()}.", "ERROR")
+        with auth_lock:
+            platform_auth_status[platform] = "requires_login"
+        return False
+        
+    await acquire_browser()
+    success = False
+    
+    async with async_playwright() as p:
+        try:
+            context = await get_persistent_context(p, headless=True)
+            page = await context.new_page()
+            
+            log_message("Auth", f"Attempting login to {platform.capitalize()} for {username}...")
+            
+            if platform == "linkedin":
+                await page.goto("https://www.linkedin.com/login", timeout=30000)
+                await page.fill("input#username", username)
+                await page.fill("input#password", password)
+                await page.click("button[type='submit']")
+                await page.wait_for_load_state("networkidle")
+                await asyncio.sleep(3)
+                
+                # Check for 2FA challenge page
+                if "/feed" not in page.url:
+                    html_content = await page.content()
+                    if "/checkpoint/challenge/" in page.url or "pin" in html_content.lower() or "verification" in html_content.lower():
+                        code = await handle_2fa_verification(page, "linkedin")
+                        if code:
+                            pin_input = await page.query_selector("input[name='pin'], input[id*='pin' i], input[type='text']")
+                            if pin_input:
+                                await pin_input.fill(code)
+                                await page.click("button[type='submit'], #email-pin-submit-button")
+                                await page.wait_for_load_state("networkidle")
+                                await asyncio.sleep(5)
+                
+                if "/feed" in page.url:
+                    log_message("Auth", "LinkedIn authentication successful!", "SUCCESS")
+                    success = True
+                    
+            elif platform == "naukri":
+                await page.goto("https://www.naukri.com/nlogin/login", timeout=30000)
+                await page.fill("#usernameField", username)
+                await page.fill("#passwordField", password)
+                await page.click("button[type='submit']")
+                await page.wait_for_load_state("networkidle")
+                await asyncio.sleep(3)
+                
+                html_content = await page.content()
+                if "otp" in html_content.lower() or "verify" in html_content.lower() or "verification" in html_content.lower():
+                    code = await handle_2fa_verification(page, "naukri")
+                    if code:
+                        otp_input = await page.query_selector("input[placeholder*='OTP' i], input[id*='otp' i], input[name*='otp' i]")
+                        if otp_input:
+                            await otp_input.fill(code)
+                            submit_btn = await page.query_selector("button:has-text('Verify'), button:has-text('Submit'), button[type='submit']")
+                            if submit_btn:
+                                await submit_btn.click()
+                                await page.wait_for_load_state("networkidle")
+                                await asyncio.sleep(5)
+                
+                if "homepage" in page.url or "mnjuser" in page.url:
+                    log_message("Auth", "Naukri authentication successful!", "SUCCESS")
+                    success = True
+                    
+            elif platform == "indeed":
+                await page.goto("https://secure.indeed.com/account/login", timeout=30000)
+                email_input = await page.query_selector("input[type='email'], input[name='__email']")
+                if email_input:
+                    await email_input.fill(username)
+                    await page.click("button[type='submit']")
+                    await asyncio.sleep(2)
+                
+                pass_input = await page.query_selector("input[type='password'], input[name='__password']")
+                if pass_input:
+                    await pass_input.fill(password)
+                    await page.click("button[type='submit']")
+                    await page.wait_for_load_state("networkidle")
+                    await asyncio.sleep(3)
+                
+                html_content = await page.content()
+                if "code" in html_content.lower() or "verify" in html_content.lower() or "verification" in html_content.lower():
+                    code = await handle_2fa_verification(page, "indeed")
+                    if code:
+                        code_input = await page.query_selector("input[id*='code' i], input[name*='code' i], input[type='text']")
+                        if code_input:
+                            await code_input.fill(code)
+                            await page.click("button[type='submit']")
+                            await page.wait_for_load_state("networkidle")
+                            await asyncio.sleep(5)
+                            
+                await page.goto("https://profile.indeed.com/", timeout=20000)
+                await asyncio.sleep(2)
+                if "secure.indeed.com" not in page.url:
+                    log_message("Auth", "Indeed authentication successful!", "SUCCESS")
+                    success = True
+            
+            await context.close()
+        except Exception as e:
+            log_message("Auth", f"Authentication failed for {platform.capitalize()}: {str(e)}", "ERROR")
+        finally:
+            release_browser()
+            
+    with auth_lock:
+        platform_auth_status[platform] = "logged_in" if success else "requires_login"
+    return success
+
 # --- Profile Load/Save Helpers ---
 PROFILE_FILE = "master_profile.json"
 
@@ -419,7 +667,7 @@ def save_profile_data(data: dict):
 
 async def scrape_jobs(keywords: str) -> str:
     """
-    Search job boards for matching job listings using public APIs.
+    Search job boards for matching job listings using public APIs and authenticated platform queries.
     """
     log_message("Scraper", f"Scraping job boards for: {keywords}")
     keywords_list = [k.strip() for k in keywords.split(",") if k.strip()]
@@ -521,6 +769,146 @@ async def scrape_jobs(keywords: str) -> str:
                         })
     except Exception as e:
         log_message("Scraper", f"The Muse fetch error: {str(e)}", "WARNING")
+
+    # 4. Scrape from LinkedIn if logged in
+    if platform_auth_status.get("linkedin") == "logged_in":
+        try:
+            log_message("Scraper", "Fetching jobs from LinkedIn search (authenticated)...")
+            await acquire_browser()
+            async with async_playwright() as p:
+                context = await get_persistent_context(p, headless=True)
+                page = await context.new_page()
+                for query_kw in keywords_list[:2]: # Query first two keywords to prevent excessive searches
+                    kw_encoded = query_kw.replace(" ", "%20")
+                    await page.goto(f"https://www.linkedin.com/jobs/search/?keywords={kw_encoded}&location=Mumbai&f_TPR=r86400", timeout=20000)
+                    await asyncio.sleep(4)
+                    
+                    cards = await page.query_selector_all(".jobs-search-results-list__list-item, .job-card-container, .base-card")
+                    log_message("Scraper", f"Found {len(cards)} raw cards on LinkedIn for '{query_kw}'.")
+                    for card in cards[:8]:
+                        try:
+                            title_el = await card.query_selector(".disabled.list-style-none a, .job-card-list__title, a.job-card-container__link")
+                            if not title_el:
+                                continue
+                            title = (await title_el.inner_text()).strip()
+                            url = (await title_el.get_attribute("href") or "").split("?")[0]
+                            if not url.startswith("http"):
+                                url = "https://www.linkedin.com" + url
+                                
+                            comp_el = await card.query_selector(".job-card-container__company-name, .job-card-list__company-name, .base-card__subtitle")
+                            company = (await comp_el.inner_text()).strip() if comp_el else "Unknown Company"
+                            
+                            loc_el = await card.query_selector(".job-card-container__metadata-item, .job-card-list__metadata-item, .base-card__metadata")
+                            location = (await loc_el.inner_text()).strip() if loc_el else "Mumbai"
+                            
+                            discovered_jobs.append({
+                                "title": title,
+                                "company": company,
+                                "description": f"Position: {title} at {company}. Apply directly via LinkedIn Easy Apply.",
+                                "url": url,
+                                "location": location
+                            })
+                        except Exception as ce:
+                            continue
+                await context.close()
+        except Exception as e:
+            log_message("Scraper", f"LinkedIn scraping error: {str(e)}", "WARNING")
+        finally:
+            release_browser()
+
+    # 5. Scrape from Indeed if logged in
+    if platform_auth_status.get("indeed") == "logged_in":
+        try:
+            log_message("Scraper", "Fetching jobs from Indeed search (authenticated)...")
+            await acquire_browser()
+            async with async_playwright() as p:
+                context = await get_persistent_context(p, headless=True)
+                page = await context.new_page()
+                for query_kw in keywords_list[:2]:
+                    kw_encoded = query_kw.replace(" ", "+")
+                    await page.goto(f"https://in.indeed.com/jobs?q={kw_encoded}&l=Mumbai&fromage=1", timeout=20000)
+                    await asyncio.sleep(4)
+                    
+                    cards = await page.query_selector_all(".job_seen_beacon, td.resultContent")
+                    log_message("Scraper", f"Found {len(cards)} raw cards on Indeed for '{query_kw}'.")
+                    for card in cards[:8]:
+                        try:
+                            title_el = await card.query_selector("h2.jobTitle a, a[id*='job_' i]")
+                            if not title_el:
+                                continue
+                            title = (await title_el.inner_text()).strip()
+                            jk = await title_el.get_attribute("data-jk")
+                            if jk:
+                                url = f"https://in.indeed.com/viewjob?jk={jk}"
+                            else:
+                                url = (await title_el.get_attribute("href") or "")
+                                if url and not url.startswith("http"):
+                                    url = "https://in.indeed.com" + url
+                                    
+                            comp_el = await card.query_selector("[data-testid='company-name'], .companyName")
+                            company = (await comp_el.inner_text()).strip() if comp_el else "Unknown Company"
+                            
+                            loc_el = await card.query_selector("[data-testid='text-location'], .companyLocation")
+                            location = (await loc_el.inner_text()).strip() if loc_el else "Mumbai"
+                            
+                            discovered_jobs.append({
+                                "title": title,
+                                "company": company,
+                                "description": f"Position: {title} at {company}. Apply directly on Indeed.",
+                                "url": url,
+                                "location": location
+                            })
+                        except Exception as ce:
+                            continue
+                await context.close()
+        except Exception as e:
+            log_message("Scraper", f"Indeed scraping error: {str(e)}", "WARNING")
+        finally:
+            release_browser()
+
+    # 6. Scrape from Naukri if logged in
+    if platform_auth_status.get("naukri") == "logged_in":
+        try:
+            log_message("Scraper", "Fetching jobs from Naukri search (authenticated)...")
+            await acquire_browser()
+            async with async_playwright() as p:
+                context = await get_persistent_context(p, headless=True)
+                page = await context.new_page()
+                for query_kw in keywords_list[:2]:
+                    kw_encoded = query_kw.lower().replace(" ", "-")
+                    await page.goto(f"https://www.naukri.com/{kw_encoded}-jobs-in-mumbai?src=jobsearchDesk&xp=1", timeout=20000)
+                    await asyncio.sleep(4)
+                    
+                    cards = await page.query_selector_all(".jobTuple, .cust-job-tuple, [data-job-id]")
+                    log_message("Scraper", f"Found {len(cards)} raw cards on Naukri for '{query_kw}'.")
+                    for card in cards[:8]:
+                        try:
+                            title_el = await card.query_selector("a.title, a.cust-job-title")
+                            if not title_el:
+                                continue
+                            title = (await title_el.inner_text()).strip()
+                            url = (await title_el.get_attribute("href") or "").split("?")[0]
+                            
+                            comp_el = await card.query_selector("a.comp-name, a.companyName")
+                            company = (await comp_el.inner_text()).strip() if comp_el else "Unknown Company"
+                            
+                            loc_el = await card.query_selector(".loc-wrap, .location")
+                            location = (await loc_el.inner_text()).strip() if loc_el else "Mumbai"
+                            
+                            discovered_jobs.append({
+                                "title": title,
+                                "company": company,
+                                "description": f"Position: {title} at {company}. Apply directly on Naukri.",
+                                "url": url,
+                                "location": location
+                            })
+                        except Exception as ce:
+                            continue
+                await context.close()
+        except Exception as e:
+            log_message("Scraper", f"Naukri scraping error: {str(e)}", "WARNING")
+        finally:
+            release_browser()
 
     # Deduplicate results by URL
     seen_urls = set()
@@ -775,6 +1163,7 @@ async def generate_tailored_pdf(job_description: str, master_profile: str, job_i
 async def auto_apply(job_url: str, pdf_path: str, profile_data: str, job_id: int) -> str:
     """
     Automate field-mapping, form uploads, and submissions via Playwright. Capture CAPTCHA fallbacks.
+    Supports platform-specific logic for LinkedIn, Indeed, and Naukri.
     """
     from playwright.async_api import async_playwright
     log_message("AutoApply", f"Launching playwright sandbox for Job ID {job_id}...")
@@ -784,17 +1173,25 @@ async def auto_apply(job_url: str, pdf_path: str, profile_data: str, job_id: int
     screenshot_name = f"captcha_job_{job_id}.png"
     screenshot_path = os.path.join("static", "screenshots", screenshot_name)
 
+    is_platform = any(k in job_url.lower() for k in ["linkedin.com", "indeed.com", "naukri.com"])
+    
+    if is_platform:
+        await acquire_browser()
+
     async with async_playwright() as p:
         try:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(
-                viewport={"width": 1280, "height": 800},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
+            if is_platform:
+                context = await get_persistent_context(p, headless=True)
+            else:
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context(
+                    viewport={"width": 1280, "height": 800},
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+            
             page = await context.new_page()
-
             log_message("AutoApply", f"Opening application URL: {job_url}")
-            await page.goto(job_url, timeout=30000, wait_until="load")
+            await page.goto(job_url, timeout=40000, wait_until="load")
             await asyncio.sleep(4)
 
             # Check for CAPTCHA elements
@@ -817,10 +1214,166 @@ async def auto_apply(job_url: str, pdf_path: str, profile_data: str, job_id: int
                 await page.screenshot(path=screenshot_path)
                 update_job_screenshot(job_id, f"/static/screenshots/{screenshot_name}")
                 update_job_status(job_id, "Requires Intervention")
-                await browser.close()
+                await context.close()
+                if not is_platform:
+                    await browser.close()
                 return "Requires Intervention: CAPTCHA detected."
 
-            # Mock automation filling fields (for robustness in sandbox environments)
+            # --- Platform-Specific Form Handling ---
+            
+            if "linkedin.com" in job_url.lower():
+                log_message("AutoApply", "LinkedIn URL detected. Searching for Easy Apply...")
+                easy_apply_btn = await page.query_selector("button.jobs-apply-button, button[aria-label*='Easy Apply' i], button:has-text('Easy Apply')")
+                
+                if not easy_apply_btn:
+                    # Check if already applied
+                    already_applied = await page.query_selector(".jobs-s-apply__applied-date, .artdeco-inline-feedback--success")
+                    if already_applied:
+                        log_message("AutoApply", "LinkedIn job already applied to.", "SUCCESS")
+                        update_job_status(job_id, "Applied")
+                        await context.close()
+                        return "Applied successfully."
+                        
+                    # Standard Apply redirects to external site
+                    apply_btn = await page.query_selector("button.jobs-apply-button")
+                    if apply_btn:
+                        log_message("AutoApply", "LinkedIn job has external apply. Clicking redirect...")
+                        async with page.context.expect_page() as new_page_info:
+                            await apply_btn.click()
+                        page = await new_page_info.value
+                        await page.wait_for_load_state("load")
+                        await asyncio.sleep(4)
+                        # We continue below as generic external form
+                    else:
+                        log_message("AutoApply", "No apply button found on LinkedIn page.", "WARNING")
+                        update_job_status(job_id, "Requires Intervention")
+                        await context.close()
+                        return "Requires Intervention: Apply button missing."
+                
+                else:
+                    log_message("AutoApply", "Found Easy Apply. Opening LinkedIn application modal...")
+                    await easy_apply_btn.click()
+                    await asyncio.sleep(3)
+                    
+                    # Navigate Easy Apply multi-step modal
+                    step = 0
+                    applied = False
+                    while step < 10:
+                        step += 1
+                        await page.screenshot(path=screenshot_path)
+                        update_job_screenshot(job_id, f"/static/screenshots/{screenshot_name}")
+                        
+                        # Check if any input fields need filling
+                        inputs = await page.query_selector_all("input[type='text'], input[type='tel'], input[type='email']")
+                        for inp in inputs:
+                            val = await inp.input_value()
+                            if not val:
+                                name_attr = await inp.get_attribute("name") or ""
+                                id_attr = await inp.get_attribute("id") or ""
+                                placeholder = await inp.get_attribute("placeholder") or ""
+                                combined = (name_attr + id_attr + placeholder).lower()
+                                
+                                if "phone" in combined or "mobile" in combined or "tel" in combined:
+                                    await inp.fill(profile.get("contact", {}).get("phone", ""))
+                                elif "email" in combined:
+                                    await inp.fill(profile.get("contact", {}).get("email", ""))
+                                elif "name" in combined:
+                                    await inp.fill(profile.get("name", ""))
+                                    
+                        # Check if upload file exists
+                        file_input = await page.query_selector("input[type='file']")
+                        if file_input:
+                            await file_input.set_input_files(pdf_abs_path)
+                            await asyncio.sleep(2)
+                            
+                        # Handle screening questions (radio/checkboxes/text)
+                        # Find text area or text input screening questions
+                        text_questions = await page.query_selector_all("input[type='text'], textarea")
+                        for tq in text_questions:
+                            val = await tq.input_value()
+                            if not val:
+                                label_el = await page.query_selector(f"label[for='{await tq.get_attribute('id')}']")
+                                label_text = await label_el.inner_text() if label_el else ""
+                                if any(w in label_text.lower() for w in ["experience", "years"]):
+                                    await tq.fill("1") # Assume 1 year for fresher
+                                elif "gpa" in label_text.lower() or "grade" in label_text.lower():
+                                    await tq.fill("7.88")
+                                else:
+                                    await tq.fill("Yes")
+                                    
+                        # Find radio questions (typically yes/no)
+                        radio_groups = await page.query_selector_all("fieldset")
+                        for rg in radio_groups:
+                            # If no radio is checked, check the 'Yes' option
+                            checked = await rg.query_selector("input[type='radio']:checked")
+                            if not checked:
+                                yes_opt = await rg.query_selector("input[type='radio'][value*='yes' i], label:has-text('Yes')")
+                                if yes_opt:
+                                    await yes_opt.click()
+                                    
+                        # Locate navigation buttons
+                        next_btn = await page.query_selector("button:has-text('Next'), button:has-text('Continue'), button:has-text('Review')")
+                        submit_btn = await page.query_selector("button:has-text('Submit application'), button:aria-label*='Submit application' i")
+                        
+                        if submit_btn:
+                            log_message("AutoApply", "Submitting LinkedIn Easy Apply application...")
+                            await submit_btn.click()
+                            await asyncio.sleep(4)
+                            applied = True
+                            break
+                        elif next_btn:
+                            await next_btn.click()
+                            await asyncio.sleep(2)
+                        else:
+                            # Stuck or finished
+                            break
+                            
+                    if applied:
+                        log_message("AutoApply", "LinkedIn Easy Apply application submitted successfully!", "SUCCESS")
+                        update_job_status(job_id, "Applied")
+                        await context.close()
+                        return "Applied successfully."
+                    else:
+                        log_message("AutoApply", "Easy Apply modal got stuck or had complex custom questions. Marking for review.", "WARNING")
+                        update_job_status(job_id, "Requires Intervention")
+                        await context.close()
+                        return "Requires Intervention: Easy Apply stuck."
+                        
+            elif "indeed.com" in job_url.lower():
+                log_message("AutoApply", "Indeed URL detected. Searching for Indeed Apply...")
+                indeed_apply_btn = await page.query_selector("button#indeedApplyButton, .indeed-apply-button, button:has-text('Apply Now')")
+                
+                if indeed_apply_btn:
+                    log_message("AutoApply", "Clicking Indeed Apply button...")
+                    await indeed_apply_btn.click()
+                    await asyncio.sleep(4)
+                    await page.screenshot(path=screenshot_path)
+                    update_job_screenshot(job_id, f"/static/screenshots/{screenshot_name}")
+                    log_message("AutoApply", "Indeed Apply modal opened. Marking for user verification.", "WARNING")
+                    update_job_status(job_id, "Requires Intervention")
+                    await context.close()
+                    return "Requires Intervention: Indeed Apply verification needed."
+                else:
+                    log_message("AutoApply", "Indeed job is external or redirect. Running external autofill...")
+                    
+            elif "naukri.com" in job_url.lower():
+                log_message("AutoApply", "Naukri URL detected. Attempting direct apply...")
+                apply_btn = await page.query_selector("button:has-text('Apply'), .apply-button")
+                if apply_btn:
+                    await apply_btn.click()
+                    await asyncio.sleep(4)
+                    log_message("AutoApply", "Clicked Naukri Apply button.", "SUCCESS")
+                    update_job_status(job_id, "Applied")
+                    await context.close()
+                    return "Applied successfully."
+                else:
+                    log_message("AutoApply", "Naukri apply button not found.", "WARNING")
+                    update_job_status(job_id, "Requires Intervention")
+                    await context.close()
+                    return "Requires Intervention: Naukri apply button missing."
+
+            # --- Generic / External Form Autofill ---
+            log_message("AutoApply", "Running generic form filler on page...")
             name_filled = False
             email_filled = False
             phone_filled = False
@@ -889,12 +1442,16 @@ async def auto_apply(job_url: str, pdf_path: str, profile_data: str, job_id: int
                 
                 log_message("AutoApply", "Application submitted successfully!", "SUCCESS")
                 update_job_status(job_id, "Applied")
-                await browser.close()
+                await context.close()
+                if not is_platform:
+                    await browser.close()
                 return "Applied successfully."
             else:
                 log_message("AutoApply", "Application layout complex. Marking for user intervention.", "WARNING")
                 update_job_status(job_id, "Requires Intervention")
-                await browser.close()
+                await context.close()
+                if not is_platform:
+                    await browser.close()
                 return "Requires Intervention: Custom layout."
 
         except Exception as e:
@@ -905,7 +1462,16 @@ async def auto_apply(job_url: str, pdf_path: str, profile_data: str, job_id: int
             except:
                 pass
             update_job_status(job_id, "Requires Intervention")
+            try:
+                await context.close()
+                if not is_platform:
+                    await browser.close()
+            except:
+                pass
             return f"Requires Intervention: automation failure."
+        finally:
+            if is_platform:
+                release_browser()
 
 
 async def send_cold_email(company_name: str, job_description: str, resume_path: str, recruiter_email: str = None, job_id: int = None) -> str:
@@ -1128,7 +1694,7 @@ async def run_local_pipeline_step():
 
     if disc_count < 2:
         log_message("AgentLoop", "Discovered jobs count is low. Scraping job listings...")
-        scraped_json = await scrape_jobs("Python Intern, Software Engineer Intern, Developer Intern, Junior Developer, Graduate Engineer")
+        scraped_json = await scrape_jobs("Python Fresher Mumbai, Software Engineer Intern Mumbai, Web Developer Fresher Mumbai, DevOps Intern Mumbai, Graduate Engineer Mumbai")
         scraped_jobs = json.loads(scraped_json)
         
         conn = get_db_connection()
@@ -1293,6 +1859,9 @@ templates = Jinja2Templates(directory="templates")
 @app.on_event("startup")
 def startup_event():
     init_db()
+    # Check login status in background tasks
+    for platform in ["linkedin", "naukri", "indeed"]:
+        asyncio.create_task(check_platform_login_status(platform))
     start_agent_thread()
 
 @app.get("/", response_class=HTMLResponse)
@@ -1373,6 +1942,50 @@ async def trigger_outreach(job_id: int):
         return {"status": "success", "message": email_res}
     else:
         return {"status": "error", "message": email_res}
+class CodeSubmit(BaseModel):
+    code: str
+
+@app.get("/api/auth/status")
+async def get_auth_status():
+    global platform_auth_status, active_2fa
+    with auth_lock:
+        return {
+            "statuses": platform_auth_status,
+            "active_2fa": {
+                "platform": active_2fa["platform"],
+                "screenshot_path": active_2fa["screenshot_path"],
+                "status": active_2fa["status"]
+            }
+        }
+
+@app.post("/api/auth/login/{platform}")
+async def trigger_platform_login(platform: str):
+    if platform not in ["linkedin", "naukri", "indeed"]:
+        raise HTTPException(status_code=400, detail="Invalid platform name.")
+    
+    # Trigger login in a background task
+    asyncio.create_task(execute_platform_login(platform))
+    return {"status": "success", "message": f"Login process triggered for {platform.capitalize()}."}
+
+@app.post("/api/auth/submit-code")
+async def submit_2fa_code(data: CodeSubmit):
+    global active_2fa
+    with auth_lock:
+        if active_2fa["status"] != "waiting":
+            raise HTTPException(status_code=400, detail="No active 2FA verification challenge found.")
+        active_2fa["code"] = data.code
+        active_2fa["status"] = "submitted"
+    return {"status": "success", "message": "Verification code submitted. Processing..."}
+
+@app.post("/api/auth/cancel-2fa")
+async def cancel_2fa():
+    global active_2fa
+    with auth_lock:
+        active_2fa["status"] = "idle"
+        active_2fa["platform"] = None
+        active_2fa["screenshot_path"] = None
+        active_2fa["code"] = None
+    return {"status": "success", "message": "2FA verification cancelled."}
 
 @app.get("/api/profile")
 async def get_profile():

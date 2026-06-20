@@ -923,6 +923,29 @@ header {
   to { transform: rotate(360deg); }
 }
 
+/* Platform connection button styling */
+.btn-connect {
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 4px;
+  background-color: var(--linkedin-blue);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-connect:hover {
+  background-color: var(--linkedin-blue-hover);
+}
+
+.btn-connect:disabled {
+  background-color: rgba(0, 0, 0, 0.08) !important;
+  color: var(--color-text-muted) !important;
+  cursor: not-allowed;
+}
+
 /* Responsiveness */
 @media (max-width: 1200px) {
   .kanban-board {

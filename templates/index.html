@@ -172,6 +172,47 @@
         </div>
       </div>
 
+      <!-- Job Boards Connection Card -->
+      <div class="profile-card" id="job-boards-connection">
+        <div class="profile-card-header">
+          <span><i class="fas fa-link"></i> Job Boards Connection</span>
+        </div>
+        <div class="profile-body-container" style="padding: 12px;">
+          <div class="connection-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <i class="fab fa-linkedin" style="color: #0a66c2; font-size: 1.2rem;"></i>
+              <span style="font-weight: 600; font-size: 0.9rem;">LinkedIn</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="status-badge" id="status-linkedin" style="margin-right: 4px;">Unknown</span>
+              <button class="btn-connect" id="btn-connect-linkedin" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 4px; background-color: var(--color-primary); color: #fff; border: none; cursor: pointer;" onclick="connectPlatform('linkedin')">Connect</button>
+            </div>
+          </div>
+          
+          <div class="connection-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <i class="fas fa-briefcase" style="color: #ff6f00; font-size: 1.1rem;"></i>
+              <span style="font-weight: 600; font-size: 0.9rem;">Naukri</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="status-badge" id="status-naukri" style="margin-right: 4px;">Unknown</span>
+              <button class="btn-connect" id="btn-connect-naukri" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 4px; background-color: var(--color-primary); color: #fff; border: none; cursor: pointer;" onclick="connectPlatform('naukri')">Connect</button>
+            </div>
+          </div>
+
+          <div class="connection-row" style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <i class="fas fa-search" style="color: #002f87; font-size: 1.1rem;"></i>
+              <span style="font-weight: 600; font-size: 0.9rem;">Indeed</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="status-badge" id="status-indeed" style="margin-right: 4px;">Unknown</span>
+              <button class="btn-connect" id="btn-connect-indeed" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 4px; background-color: var(--color-primary); color: #fff; border: none; cursor: pointer;" onclick="connectPlatform('indeed')">Connect</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </section>
 
   </div>
@@ -200,6 +241,32 @@
             <i class="fas fa-external-link-alt"></i> Open Page
           </a>
           <button class="btn-modal btn-modal-action" id="btn-modal-action">Mark as Applied</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2FA Authentication Modal -->
+  <div class="modal" id="2fa-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title">Verification Code Required</h2>
+        <button class="modal-close" id="btn-2fa-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>The platform <strong id="2fa-platform-name">LinkedIn</strong> login requires a Multi-Factor Verification Code (SMS/Email OTP or PIN). Please check your messages/email and enter the code below:</p>
+        
+        <div class="modal-img-container" style="max-height: 250px; overflow: hidden; margin-top: 10px; border: 1px solid var(--color-border); border-radius: 4px;">
+          <img id="2fa-screenshot-image" src="" alt="2FA Screen Capture" style="width: 100%; object-fit: contain;">
+        </div>
+        
+        <div style="margin: 15px 0;">
+          <input type="text" id="input-2fa-code" placeholder="Enter Verification Code" style="width: 100%; padding: 10px; border-radius: 4px; border: 1px solid var(--color-border); font-size: 1rem; box-sizing: border-box;">
+        </div>
+        
+        <div class="modal-actions">
+          <button class="btn-modal btn-modal-cancel" id="btn-2fa-cancel">Cancel</button>
+          <button class="btn-modal btn-modal-action" id="btn-2fa-submit">Submit Code</button>
         </div>
       </div>
     </div>

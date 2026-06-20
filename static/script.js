@@ -37,6 +37,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnAddContactSubmit = document.getElementById('btn-add-contact-submit');
   const btnSendOutreachSubmit = document.getElementById('btn-send-outreach-submit');
   
+  // DOM Elements for 2FA and Connections
+  const btn2faClose = document.getElementById('btn-2fa-close');
+  const btn2faCancel = document.getElementById('btn-2fa-cancel');
+  const btn2faSubmit = document.getElementById('btn-2fa-submit');
+  const modal2fa = document.getElementById('2fa-modal');
+  const input2faCode = document.getElementById('input-2fa-code');
+  const img2faScreenshot = document.getElementById('2fa-screenshot-image');
+  const text2faPlatform = document.getElementById('2fa-platform-name');
+  
   let currentContactsJobId = null;
   let currentContactsList = [];
   
@@ -60,6 +69,10 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Poll for jobs update every 10 seconds to keep UI synced with agent
     setInterval(loadJobs, 10000);
+
+    // Poll for login/auth status of platforms every 5 seconds
+    pollAuthStatus();
+    setInterval(pollAuthStatus, 5000);
   }
 
   // Load jobs from API and render
@@ -418,7 +431,13 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('click', (e) => {
       if (e.target === modal) modal.style.display = 'none';
       if (e.target === contactsModal) closeAndSaveContacts();
+      if (e.target === modal2fa) cancel2FA();
     });
+
+    // 2FA action listeners
+    btn2faClose.addEventListener('click', cancel2FA);
+    btn2faCancel.addEventListener('click', cancel2FA);
+    btn2faSubmit.addEventListener('click', submit2FACode);
 
     // Resume Override elements
     const resumeFileInput = document.getElementById('resume-file-input');
@@ -798,4 +817,152 @@ document.addEventListener('DOMContentLoaded', () => {
     appendLogToTerminal(log);
     terminalBody.scrollTop = terminalBody.scrollHeight;
   }
+
+  // Platform Connection Trigger
+  async function connectPlatform(platform) {
+    showLog('Auth', `Triggering connection login flow for ${platform.toUpperCase()}...`, 'info');
+    try {
+      const btn = document.getElementById(`btn-connect-${platform}`);
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Connecting';
+      }
+      
+      const response = await fetch(`${API_BASE}/api/auth/login/${platform}`, {
+        method: 'POST'
+      });
+      const data = await response.json();
+      if (response.ok && data.status === 'success') {
+        showLog('Auth', `Authentication loop started for ${platform.toUpperCase()}. Checking for 2FA prompts...`, 'info');
+      } else {
+        showLog('Auth', `Failed to trigger connection: ${data.message}`, 'error');
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = 'Connect';
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      showLog('Auth', `Connection error: ${err.message}`, 'error');
+    }
+  }
+  
+  // Submit 2FA PIN/Code
+  async function submit2FACode() {
+    const code = input2faCode.value.trim();
+    if (!code) {
+      showLog('Auth', 'Verification code cannot be empty.', 'warning');
+      return;
+    }
+    
+    btn2faSubmit.disabled = true;
+    btn2faSubmit.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Verifying...';
+    
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/submit-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code })
+      });
+      const data = await response.json();
+      
+      if (response.ok && data.status === 'success') {
+        showLog('Auth', 'Verification code submitted successfully.', 'success');
+        modal2fa.style.display = 'none';
+        input2faCode.value = '';
+      } else {
+        showLog('Auth', `Verification failed: ${data.message}`, 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      showLog('Auth', `Error submitting code: ${err.message}`, 'error');
+    } finally {
+      btn2faSubmit.disabled = false;
+      btn2faSubmit.innerHTML = 'Submit Code';
+    }
+  }
+
+  // Cancel/Abort 2FA prompt
+  async function cancel2FA() {
+    try {
+      await fetch(`${API_BASE}/api/auth/cancel-2fa`, { method: 'POST' });
+      showLog('Auth', 'MFA code entry cancelled by user.', 'warning');
+      modal2fa.style.display = 'none';
+      input2faCode.value = '';
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  // Poll Auth Status for LinkedIn, Naukri, Indeed
+  async function pollAuthStatus() {
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/status`);
+      if (!response.ok) return;
+      const data = await response.json();
+      
+      // Update badges
+      updatePlatformStatusBadge('linkedin', data.statuses.linkedin);
+      updatePlatformStatusBadge('naukri', data.statuses.naukri);
+      updatePlatformStatusBadge('indeed', data.statuses.indeed);
+      
+      // Handle active 2FA popup
+      if (data.active_2fa && data.active_2fa.status === 'waiting') {
+        if (modal2fa.style.display !== 'flex') {
+          text2faPlatform.textContent = data.active_2fa.platform.toUpperCase();
+          img2faScreenshot.src = data.active_2fa.screenshot_path + '?t=' + Date.now(); // Cache-busting
+          modal2fa.style.display = 'flex';
+          showLog('Auth', `MFA verification needed for ${data.active_2fa.platform.toUpperCase()}!`, 'warning');
+        }
+      } else {
+        if (modal2fa.style.display === 'flex' && (!data.active_2fa || data.active_2fa.status !== 'waiting')) {
+          modal2fa.style.display = 'none';
+        }
+      }
+    } catch (err) {
+      console.error('Error polling auth status:', err);
+    }
+  }
+  
+  function updatePlatformStatusBadge(platform, status) {
+    const badge = document.getElementById(`status-${platform}`);
+    const btn = document.getElementById(`btn-connect-${platform}`);
+    if (!badge) return;
+    
+    badge.textContent = status.replace('_', ' ').toUpperCase();
+    
+    badge.className = 'status-badge'; // reset
+    if (status === 'logged_in') {
+      badge.classList.add('status-applied');
+      badge.style.color = '#057642';
+      badge.style.background = 'rgba(5, 118, 66, 0.1)';
+      badge.style.borderColor = 'rgba(5, 118, 66, 0.2)';
+      if (btn) {
+        btn.disabled = false;
+        btn.style.background = '#057642';
+        btn.innerHTML = '<i class="fas fa-check-circle"></i> Connected';
+      }
+    } else if (status === 'requires_login') {
+      badge.classList.add('status-archived');
+      badge.style.color = 'var(--color-text-muted)';
+      badge.style.background = 'rgba(120, 120, 120, 0.1)';
+      badge.style.borderColor = 'rgba(120, 120, 120, 0.2)';
+      if (btn) {
+        btn.disabled = false;
+        btn.style.background = 'var(--color-primary)';
+        btn.innerHTML = 'Connect';
+      }
+    } else {
+      badge.classList.add('status-archived');
+      badge.style.color = 'var(--color-text-muted)';
+      if (btn) {
+        btn.disabled = false;
+        btn.style.background = 'var(--color-primary)';
+        btn.innerHTML = 'Connect';
+      }
+    }
+  }
+
+  // Export to global scope
+  window.connectPlatform = connectPlatform;
 });
