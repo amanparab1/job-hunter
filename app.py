@@ -199,9 +199,9 @@ def init_db():
         INSERT INTO jobs (title, company, description, url, location, status)
         VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (url) DO NOTHING
         ''', (
-            "DevOps Engineer", 
+            "Python Backend Intern", 
             "Microsoft", 
-            "We are seeking a DevOps Engineer to join our Azure Cloud Platform team. You will automate delivery pipelines, manage infrastructure as code, and optimize GitLab CI/CD workflows on Azure VMs. Strong experience with Python, Linux, and PostgreSQL is highly preferred.",
+            "We are seeking a Python Backend Intern to join our Cloud Engineering team. You will write backend services, help automate deployment pipelines, and work with PostgreSQL databases. Training on Azure and GitLab CI/CD will be provided. Perfect for freshers or students.",
             "https://careers.microsoft.com/jobs/devops-engineer-demo", 
             "Redmond, WA (Hybrid)", 
             "Discovered"
@@ -212,18 +212,19 @@ def init_db():
         INSERT INTO jobs (title, company, description, url, location, status, match_score, match_reason, screenshot_path, contacts)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (url) DO NOTHING
         ''', (
-            "Cloud Infrastructure Engineer", 
+            "Junior Cloud Engineer", 
             "GitLab Inc.", 
-            "Join GitLab as a Cloud Infrastructure Specialist! In this role, you will scale our cloud delivery systems, improve CI/CD pipelines, and manage PostgreSQL databases. Experience running Linux (Debian/Pop!_OS) containers and writing automation scripts in Python or Go is required.",
+            "Join GitLab as a Junior Cloud Infrastructure Specialist! This entry-level role focuses on supporting our CI/CD pipelines, automating Linux environments, and deploying services. Python scripting and basic PostgreSQL familiarity is required.",
             "https://about.gitlab.com/jobs/cloud-infra-demo", 
             "Remote", 
             "Requires Intervention",
-            88,
-            "Matches skills: GitLab CI/CD, Linux, Python, PostgreSQL. Highly relevant projects.",
+            92,
+            "Highly relevant projects. Strong matching skills: Python, GitLab CI/CD, Linux, PostgreSQL.",
             "/static/screenshots/captcha_job_sample.png",
             json.dumps([
                 {"name": "Sid Sijbrandij", "role": "Co-Founder & CEO", "email": "sid@gitlab.com", "pitch_type": "executive", "status": "pending"},
-                {"name": "HR Recruitment", "role": "HR Director", "email": "hr@gitlab.com", "pitch_type": "hr", "status": "pending"}
+                {"name": "Eric Johnson", "role": "VP of Engineering", "email": "eric@gitlab.com", "pitch_type": "technical", "status": "pending"},
+                {"name": "HR Recruitment", "role": "HR Recruiter", "email": "hr@gitlab.com", "pitch_type": "hr", "status": "pending"}
             ])
         ))
         
@@ -355,11 +356,17 @@ async def find_snov_contacts(company_name: str) -> list:
                         pitch_type = "hr"
                         is_match = False
                         
-                        if any(w in position for w in ["founder", "co-founder", "ceo", "cto", "cio", "coo", "president"]):
+                        if any(w in position for w in ["founder", "co-founder", "ceo", "president"]):
                             pitch_type = "executive"
+                            is_match = True
+                        elif any(w in position for w in ["cto", "tech lead", "architect", "lead developer", "engineering manager", "technical manager", "it lead"]):
+                            pitch_type = "technical"
                             is_match = True
                         elif any(w in position for w in ["hr", "recruiter", "talent", "recruitment", "people", "hiring"]):
                             pitch_type = "hr"
+                            is_match = True
+                        elif any(w in position for w in ["developer", "engineer", "programmer", "it"]):
+                            pitch_type = "technical"
                             is_match = True
                             
                         if is_match:
@@ -389,6 +396,8 @@ async def get_or_generate_contacts(company_name: str, job_description: str) -> l
     return [
         {"name": "Founder", "role": "Founder", "email": f"founder@{domain}", "pitch_type": "executive", "status": "pending"},
         {"name": "Co-Founder", "role": "Co-Founder", "email": f"cofounder@{domain}", "pitch_type": "executive", "status": "pending"},
+        {"name": "CTO", "role": "CTO", "email": f"cto@{domain}", "pitch_type": "technical", "status": "pending"},
+        {"name": "Tech Lead", "role": "Tech Lead", "email": f"techlead@{domain}", "pitch_type": "technical", "status": "pending"},
         {"name": "HR Director", "role": "HR Director", "email": f"hr@{domain}", "pitch_type": "hr", "status": "pending"},
         {"name": "Recruitment Team", "role": "Recruitment Team", "email": f"recruiting@{domain}", "pitch_type": "hr", "status": "pending"}
     ]
@@ -416,8 +425,9 @@ async def scrape_jobs(keywords: str) -> str:
     keywords_list = [k.strip() for k in keywords.split(",") if k.strip()]
     discovered_jobs = []
 
-    # Attempt fetching from public Arbeitnow API (no key required)
+    # 1. Fetch from Arbeitnow API
     try:
+        log_message("Scraper", "Fetching jobs from Arbeitnow...")
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get("https://www.arbeitnow.com/api/job-board-api")
             if response.status_code == 200:
@@ -430,7 +440,6 @@ async def scrape_jobs(keywords: str) -> str:
                     url = item.get("url", "")
                     location = item.get("location", "Remote")
                     
-                    # Match keywords against title or description
                     match = False
                     for kw in keywords_list:
                         if kw.lower() in title.lower() or kw.lower() in description.lower():
@@ -440,62 +449,135 @@ async def scrape_jobs(keywords: str) -> str:
                         discovered_jobs.append({
                             "title": title,
                             "company": company,
-                            "description": description[:1200],  # Keep description sized appropriately
+                            "description": description[:1500],
                             "url": url,
                             "location": location
                         })
     except Exception as e:
-        log_message("Scraper", f"Arbeitnow API fetch failed: {str(e)}. Using mock fallback data.", "WARNING")
+        log_message("Scraper", f"Arbeitnow fetch error: {str(e)}", "WARNING")
+
+    # 2. Fetch from Remotive API
+    try:
+        log_message("Scraper", "Fetching jobs from Remotive...")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get("https://remotive.com/api/remote-jobs?category=software-dev")
+            if response.status_code == 200:
+                data = response.json()
+                items = data.get("jobs", [])
+                for item in items:
+                    title = item.get("title", "")
+                    company = item.get("company_name", "")
+                    description = item.get("description", "")
+                    url = item.get("url", "")
+                    location = item.get("candidate_required_location", "Remote")
+                    
+                    match = False
+                    for kw in keywords_list:
+                        if kw.lower() in title.lower() or kw.lower() in description.lower():
+                            match = True
+                            break
+                    if match:
+                        discovered_jobs.append({
+                            "title": title,
+                            "company": company,
+                            "description": description[:1500],
+                            "url": url,
+                            "location": location
+                        })
+    except Exception as e:
+        log_message("Scraper", f"Remotive fetch error: {str(e)}", "WARNING")
+
+    # 3. Fetch from The Muse API
+    try:
+        log_message("Scraper", "Fetching jobs from The Muse...")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get("https://www.themuse.com/api/public/jobs?page=1&category=Software+Engineering")
+            if response.status_code == 200:
+                data = response.json()
+                items = data.get("results", [])
+                for item in items:
+                    title = item.get("name", "")
+                    company_data = item.get("company", {})
+                    company = company_data.get("name", "")
+                    description = item.get("contents", "")
+                    refs = item.get("refs", {})
+                    url = refs.get("landing_page", "")
+                    
+                    locations_data = item.get("locations", [])
+                    location = locations_data[0].get("name", "Remote") if locations_data else "Remote"
+                    
+                    match = False
+                    for kw in keywords_list:
+                        if kw.lower() in title.lower() or kw.lower() in description.lower():
+                            match = True
+                            break
+                    if match:
+                        discovered_jobs.append({
+                            "title": title,
+                            "company": company,
+                            "description": description[:1500],
+                            "url": url,
+                            "location": location
+                        })
+    except Exception as e:
+        log_message("Scraper", f"The Muse fetch error: {str(e)}", "WARNING")
+
+    # Deduplicate results by URL
+    seen_urls = set()
+    deduped_jobs = []
+    for job in discovered_jobs:
+        if job["url"] not in seen_urls:
+            seen_urls.add(job["url"])
+            deduped_jobs.append(job)
 
     # Fallback to realistic mock data if nothing found
-    if not discovered_jobs:
-        log_message("Scraper", "Using pre-configured high-quality job mockups.", "INFO")
+    if not deduped_jobs:
+        log_message("Scraper", "No active listings found online. Using pre-configured fresher mockups.", "INFO")
         mock_jobs = [
             {
-                "title": "DevOps Engineer",
+                "title": "Python Backend Intern",
                 "company": "Microsoft",
-                "description": "We are seeking a DevOps Engineer to join our Azure Cloud Platform team. You will automate delivery pipelines, manage infrastructure as code, and optimize GitLab CI/CD workflows on Azure VMs. Strong experience with Python, Linux, and PostgreSQL is highly preferred.",
+                "description": "We are seeking a Python Backend Intern to join our Cloud Engineering team. You will write backend services, help automate deployment pipelines, and work with PostgreSQL databases. Training on Azure and GitLab CI/CD will be provided. Perfect for freshers or students.",
                 "url": "https://careers.microsoft.com/jobs/devops-engineer-demo",
                 "location": "Redmond, WA (Hybrid)"
             },
             {
-                "title": "Cloud Infrastructure Engineer",
+                "title": "Junior Cloud Engineer",
                 "company": "GitLab Inc.",
-                "description": "Join GitLab as a Cloud Infrastructure Specialist! In this role, you will scale our cloud delivery systems, improve CI/CD pipelines, and manage PostgreSQL databases. Experience running Linux (Debian/Pop!_OS) containers and writing automation scripts in Python or Go is required.",
+                "description": "Join GitLab as a Junior Cloud Infrastructure Specialist! This entry-level role focuses on supporting our CI/CD pipelines, automating Linux environments, and deploying services. Python scripting and basic PostgreSQL familiarity is required.",
                 "url": "https://about.gitlab.com/jobs/cloud-infra-demo",
                 "location": "Remote"
             },
             {
-                "title": "Backend Python Developer",
+                "title": "Software Engineer Intern (Python/Django)",
                 "company": "Spotify",
-                "description": "We are looking for a Python Developer to build and optimize backend services. You will design PostgreSQL schemas, write machine learning pipelines for search relevance, and deploy to Azure Cloud. Familiarity with GitLab CI/CD, Pop!_OS/Linux development, and CNN networks is a plus.",
+                "description": "We are looking for a Python Developer Intern to build and optimize backend services. You will work on database queries, write scripts in Python, and help configure GitLab CI/CD. Familiarity with Linux development is a plus. Great learning opportunity.",
                 "url": "https://spotify.com/careers/python-developer-demo",
                 "location": "New York, NY (Remote)"
             },
             {
-                "title": "Machine Learning Engineer",
+                "title": "Graduate Cloud Engineer (Azure/Python)",
                 "company": "Google",
-                "description": "We are seeking an ML Engineer. The candidate will work on real-time neural networks (CNNs) for translation and accessibility. Requirements include deep knowledge of Python, PostgreSQL, and deploying services on cloud VMs (Google Cloud / Azure).",
+                "description": "We are seeking a Graduate Software Engineer. The candidate will work on cloud automation scripts, system scaling, and backend architectures. Requirements include basic knowledge of Python, PostgreSQL, and deploying services on cloud VMs (Google Cloud / Azure).",
                 "url": "https://careers.google.com/jobs/ml-engineer-demo",
                 "location": "Mountain View, CA"
             },
             {
-                "title": "System Administrator & DevOps Lead",
+                "title": "IT Support & DevOps Intern",
                 "company": "Red Hat",
-                "description": "Lead the DevOps transformation. System administration on Pop!_OS and Linux environments, GitLab CI/CD scripting, automating PostgreSQL backups on cloud VMs. Python scripting is a must.",
+                "description": "DevOps intern wanted. Help script GitLab CI/CD workflows, configure Pop!_OS and Linux environments, and automate PostgreSQL backups on cloud VMs. Python scripting is a must.",
                 "url": "https://redhat.com/jobs/devops-lead-demo",
                 "location": "Boston, MA (Hybrid)"
             }
         ]
-        
         for job in mock_jobs:
             for kw in keywords_list:
                 if kw.lower() in job["title"].lower() or kw.lower() in job["description"].lower():
-                    discovered_jobs.append(job)
+                    deduped_jobs.append(job)
                     break
 
-    log_message("Scraper", f"Successfully scraped {len(discovered_jobs)} matching job listings.", "SUCCESS")
-    return json.dumps(discovered_jobs)
+    log_message("Scraper", f"Successfully scraped {len(deduped_jobs)} matching job listings.", "SUCCESS")
+    return json.dumps(deduped_jobs)
 
 
 async def evaluate_match(job_description: str, master_profile: str) -> str:
@@ -908,9 +990,11 @@ async def send_cold_email(company_name: str, job_description: str, resume_path: 
                 
                 role_instructions = ""
                 if pitch_type == "executive":
-                    role_instructions = f"The recipient is a Founder/Co-Founder/Executive named {target_name}. Focus on high-level infrastructure scaling, cost optimization, and back-end efficiency. Make it brief and business-oriented."
+                    role_instructions = f"The recipient is a Founder/Co-Founder/Executive named {target_name}. Focus on business value, backend scalability, and infrastructure cost/efficiency. Make it brief."
+                elif pitch_type == "technical":
+                    role_instructions = f"The recipient is a CTO, Tech Lead, or Engineer named {target_name}. Focus on specific technical projects, coding practices (Python, PostgreSQL, GitLab CI/CD pipelines, Pop!_OS Linux), and how your engineering background fits their stack. Mention you are seeking a fresher/internship opportunity."
                 else:
-                    role_instructions = f"The recipient is an HR Recruiter named {target_name}. Focus on skills alignment (Python, Azure, CI/CD, ML), project accomplishments, and prompt availability."
+                    role_instructions = f"The recipient is an HR Recruiter/Director named {target_name}. Focus on skills alignment (Python, Azure, CI/CD, ML), Xavier Institute education (7.88 CGPA), and prompt availability for fresher/internship roles."
                 
                 prompt = f"""
                 You are Aman Parab. Write a brief technical cold email to the {target_role} ({target_name}) of {company_name}.
@@ -942,11 +1026,23 @@ async def send_cold_email(company_name: str, job_description: str, resume_path: 
             if pitch_type == "executive":
                 email_body = f"""Dear {target_name},
 
-I wanted to reach out regarding backend engineering at {company_name}. I am a Cloud Systems and Backend Developer specializing in Python architectures, Microsoft Azure VM automation, PostgreSQL databases, and GitLab CI/CD pipelines.
+I wanted to reach out regarding engineering efficiency and infrastructure scaling at {company_name}. I am a Cloud Systems and Backend Developer specializing in Python architectures, Microsoft Azure VM automation, PostgreSQL databases, and GitLab CI/CD pipelines.
 
-I focus on infrastructure-as-code automation and robust backend services. I develop in Pop!_OS Linux and love building high-performance systems.
+I focus on infrastructure-as-code automation and backend scalability. I am looking for a tech fresher or internship role where I can help automate delivery flows and reduce server overhead.
 
-My resume is attached. I would appreciate 10 minutes to discuss how my automation and cloud scaling expertise can benefit {company_name}.
+My resume is attached. I would appreciate 10 minutes to discuss how my automation skills can benefit {company_name}.
+
+Best regards,
+Aman Parab
++91-9324101109 | amanparab007@gmail.com"""
+            elif pitch_type == "technical":
+                email_body = f"""Dear {target_name},
+
+I wanted to reach out to a fellow engineer regarding backend and cloud initiatives at {company_name}. I am a recent B.E. IT graduate from Xavier Institute of Engineering (7.88 CGPA) looking for a Python Backend or Cloud Engineering Fresher / Intern position.
+
+I have hands-on experience developing Python architectures, scripting GitLab CI/CD pipelines to automate microservices deployment on Azure VMs, and structuring PostgreSQL databases. I develop in Pop!_OS Linux and love solving algorithmic challenges.
+
+I've attached my resume. I'd love to chat briefly about how my training and automated cloud skills could help speed up developments in your engineering team.
 
 Best regards,
 Aman Parab
@@ -954,11 +1050,11 @@ Aman Parab
             else:
                 email_body = f"""Dear {target_name},
 
-I recently reviewed your backend engineering initiatives and wanted to connect. I am a Backend and Cloud Systems Engineer with specialized expertise in Python backend architectures, Microsoft Azure VM automation, PostgreSQL databases, and GitLab CI/CD pipeline deployments.
+I recently reviewed your backend engineering initiatives and wanted to connect. I am a recent B.E. IT graduate (Xavier Institute of Engineering, CGPA: 7.88) seeking a Backend / Cloud Systems Engineer Fresher or Intern position.
 
-My work includes automating GitLab CI/CD workflows for deploying microservices onto Azure VMs, engineering real-time ML translation networks (CNNs), and constructing analytical PostgreSQL databases. 
+My credentials include automating GitLab CI/CD workflows for deploying microservices onto Azure VMs, engineering real-time ML translation networks (CNNs), and constructing analytical PostgreSQL databases.
 
-I've attached my tailored resume for your reference. I would welcome the opportunity to chat about how my automation and cloud engineering credentials align with {company_name}'s open roles.
+I've attached my tailored resume for your reference. I would welcome the opportunity to chat about how my qualifications align with {company_name}'s open fresher or intern roles.
 
 Best regards,
 Aman Parab
@@ -1032,7 +1128,7 @@ async def run_local_pipeline_step():
 
     if disc_count < 2:
         log_message("AgentLoop", "Discovered jobs count is low. Scraping job listings...")
-        scraped_json = await scrape_jobs("DevOps, Python Developer, Cloud Engineer")
+        scraped_json = await scrape_jobs("Python Intern, Software Engineer Intern, Developer Intern, Junior Developer, Graduate Engineer")
         scraped_jobs = json.loads(scraped_json)
         
         conn = get_db_connection()
