@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aman Parab - Job Hunter Agent Dashboard</title>
+  <meta name="description" content="AI Job Hunt Automation Pipeline powered by Google Antigravity Agent & Gemini.">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+
+  <div class="app-container">
+    
+    <!-- Premium Header -->
+    <header id="app-header">
+      <div class="brand-section">
+        <h1 id="brand-title">ANTIGRAVITY JOB HUNTER</h1>
+        <p id="brand-tagline">Automated discovery, match evaluation, resume tailoring, auto-applying, and cold outreach</p>
+      </div>
+      <div class="status-badge-container">
+        <div class="loop-status" id="loop-status-indicator">
+          <div class="pulse-dot" id="loop-pulse-dot"></div>
+          <span id="loop-status-text">Agent Loop: Active</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Omnibar Section -->
+    <section class="omnibar-container" id="profile-omnibar-section">
+      <div class="omnibar-label">
+        <i class="fas fa-magic"></i>
+        <span>Profile Sync Omnibar</span>
+      </div>
+      <form class="omnibar-form" id="omnibar-form">
+        <input 
+          type="text" 
+          class="omnibar-input" 
+          id="omnibar-input" 
+          placeholder="e.g. Add skill: Docker, or Add project: Kubernetes Cluster Setup (GitLab CI/CD, Azure - deployed microservices)"
+          required
+        >
+        <button type="submit" class="omnibar-button" id="btn-omnibar-submit">Update Profile</button>
+      </form>
+    </section>
+
+    <!-- Kanban Board Grid -->
+    <main class="kanban-board" id="job-kanban-board">
+      
+      <!-- Discovered Column -->
+      <section class="kanban-column col-discovered" id="col-discovered">
+        <div class="column-header">
+          <span class="column-title">Discovered</span>
+          <span class="column-count" id="count-discovered">0</span>
+        </div>
+        <div class="cards-container" id="cards-discovered"></div>
+      </section>
+
+      <!-- Tailored Column -->
+      <section class="kanban-column col-tailored" id="col-tailored">
+        <div class="column-header">
+          <span class="column-title">Tailored</span>
+          <span class="column-count" id="count-tailored">0</span>
+        </div>
+        <div class="cards-container" id="cards-tailored"></div>
+      </section>
+
+      <!-- Applied Column -->
+      <section class="kanban-column col-applied" id="col-applied">
+        <div class="column-header">
+          <span class="column-title">Applied</span>
+          <span class="column-count" id="count-applied">0</span>
+        </div>
+        <div class="cards-container" id="cards-applied"></div>
+      </section>
+
+      <!-- Emailed Column -->
+      <section class="kanban-column col-emailed" id="col-emailed">
+        <div class="column-header">
+          <span class="column-title">Emailed</span>
+          <span class="column-count" id="count-emailed">0</span>
+        </div>
+        <div class="cards-container" id="cards-emailed"></div>
+      </section>
+
+      <!-- Requires Intervention Column -->
+      <section class="kanban-column col-intervention" id="col-intervention">
+        <div class="column-header">
+          <span class="column-title">Requires Intervention</span>
+          <span class="column-count" id="count-intervention">0</span>
+        </div>
+        <div class="cards-container" id="cards-intervention"></div>
+      </section>
+
+    </main>
+
+    <!-- Bottom Section: Logs and Profile -->
+    <section class="dashboard-details">
+      
+      <!-- Live Agent Terminal -->
+      <div class="terminal-container" id="agent-terminal">
+        <div class="terminal-header">
+          <div class="terminal-title">
+            <i class="fas fa-terminal"></i>
+            <span>Agent Execution Log Stream</span>
+          </div>
+          <div class="terminal-dots">
+            <span class="terminal-dot dot-red"></span>
+            <span class="terminal-dot dot-yellow"></span>
+            <span class="terminal-dot dot-green"></span>
+          </div>
+        </div>
+        <div class="terminal-body" id="terminal-body">
+          <div class="log-entry">
+            <span class="log-time">[System Initialize]</span>
+            <span class="log-info"> Connecting to Antigravity runtime, waiting for agent steps...</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Profile Quick View -->
+      <div class="profile-card" id="profile-quickview">
+        <div class="profile-card-header">
+          <span><i class="fas fa-user-tie"></i> Profile Database Quick-View</span>
+        </div>
+        <div class="profile-section">
+          <span class="profile-section-title">Aman Parab</span>
+          <div style="font-size: 0.85rem; color: var(--color-text-muted); margin-top: 0.25rem;">
+            <i class="fas fa-envelope"></i> amanparab007@gmail.com | <i class="fas fa-phone"></i> +91-9324101109
+          </div>
+          <div style="font-size: 0.85rem; color: var(--color-text-muted);">
+            <i class="fas fa-graduation-cap"></i> B.E. IT, Xavier Institute of Engineering (CGPA: 7.88)
+          </div>
+        </div>
+        
+        <div class="profile-section">
+          <span class="profile-section-title">Core Skills</span>
+          <div class="skills-tags" id="profile-skills">
+            <!-- Loaded dynamically -->
+          </div>
+        </div>
+
+        <div class="profile-section">
+          <span class="profile-section-title">Projects</span>
+          <div id="profile-projects">
+            <!-- Loaded dynamically -->
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <!-- CAPTCHA Intervention Modal -->
+  <div class="modal" id="intervention-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title">CAPTCHA Resolution Required</h2>
+        <button class="modal-close" id="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>The browser auto-application was paused because it encountered a CAPTCHA or a verification challenge. Please click "Open Application Page" to solve it, and once complete, mark the task as resolved.</p>
+        
+        <div style="font-size: 0.95rem; line-height: 1.5;">
+          <strong>Job:</strong> <span id="modal-job-title"></span> at <span id="modal-job-company"></span>
+        </div>
+        
+        <div class="modal-img-container">
+          <img id="modal-captcha-image" src="" alt="CAPTCHA Screen Capture">
+        </div>
+        
+        <div class="modal-actions">
+          <button class="btn-modal btn-modal-cancel" id="btn-modal-cancel">Cancel</button>
+          <a class="btn-modal btn-modal-cancel" id="modal-job-link" target="_blank" style="text-decoration: none; text-align: center; display: inline-flex; align-items: center; justify-content: center; gap: 0.25rem;">
+            <i class="fas fa-external-link-alt"></i> Open Page
+          </a>
+          <button class="btn-modal btn-modal-action" id="btn-modal-action">Mark as Applied</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

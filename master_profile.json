@@ -1,0 +1,37 @@
+{
+  "name": "Aman Parab",
+  "contact": {
+    "email": "amanparab007@gmail.com",
+    "phone": "+91-9324101109"
+  },
+  "education": {
+    "degree": "B.E. Information Technology",
+    "institution": "Xavier Institute of Engineering",
+    "cgpa": "7.88"
+  },
+  "skills": [
+    "Python",
+    "Microsoft Azure",
+    "GitLab CI/CD",
+    "PostgreSQL",
+    "Linux (Pop!_OS)",
+    "Machine Learning"
+  ],
+  "projects": [
+    {
+      "title": "Real-Time Sign Language Translator",
+      "technologies": ["Python", "CNN", "ML"],
+      "details": "Real-Time Sign Language Translator using Convolutional Neural Networks (CNN) and Machine Learning, achieving a translation accuracy of 92%."
+    },
+    {
+      "title": "CI/CD Automation with GitLab and Azure VM",
+      "technologies": ["GitLab CI/CD", "Microsoft Azure"],
+      "details": "CI/CD Automation with GitLab and Microsoft Azure VM, containerizing applications and automating delivery pipelines."
+    },
+    {
+      "title": "Brain Disease Detection System",
+      "technologies": ["Python", "PostgreSQL", "ML"],
+      "details": "Brain Disease Detection System leveraging Python and Machine Learning models with PostgreSQL backend for storage and analytics."
+    }
+  ]
+}
