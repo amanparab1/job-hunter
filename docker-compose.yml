@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  job-hunter:
+    build: .
+    container_name: job_hunter_app
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist SQLite database and generated assets between container updates
+      - ./job_tracker.db:/app/job_tracker.db
+      - ./static/resumes:/app/static/resumes
+      - ./static/screenshots:/app/static/screenshots
+    env_file:
+      - .env
+    restart: unless-stopped
