@@ -13,7 +13,7 @@ from email.mime.application import MIMEApplication
 from typing import List, Dict, Any, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -765,15 +765,25 @@ async def run_local_pipeline_step():
 
     for job in tailored_jobs:
         job_id = job["id"]
-        # Generate resume
-        pdf_path = await generate_tailored_pdf(job["description"], json.dumps(profile), job_id)
-        if pdf_path:
+        # Check if a custom uploaded resume exists
+        default_resume = "static/default_resume.pdf"
+        if os.path.exists(default_resume):
+            pdf_path = "/static/default_resume.pdf"
+            log_message("AgentLoop", f"Found custom default resume. Using it for Job ID {job_id}.")
             update_job_resume(job_id, pdf_path)
             # Submit application
             apply_res = await auto_apply(job["url"], pdf_path, json.dumps(profile), job_id)
             log_message("AgentLoop", f"Job ID {job_id} application: {apply_res}")
         else:
-            log_message("AgentLoop", f"Resume tailoring failed for Job ID {job_id}", "ERROR")
+            # Generate resume
+            pdf_path = await generate_tailored_pdf(job["description"], json.dumps(profile), job_id)
+            if pdf_path:
+                update_job_resume(job_id, pdf_path)
+                # Submit application
+                apply_res = await auto_apply(job["url"], pdf_path, json.dumps(profile), job_id)
+                log_message("AgentLoop", f"Job ID {job_id} application: {apply_res}")
+            else:
+                log_message("AgentLoop", f"Resume tailoring failed for Job ID {job_id}", "ERROR")
 
         # Rate-limiting delay
         delay = random.randint(60, 180)
@@ -1000,6 +1010,35 @@ async def get_logs(since: float = 0):
     with logs_lock:
         filtered_logs = [log for log in LOGS if log["timestamp"] > since]
     return filtered_logs
+
+@app.post("/api/resume/upload")
+async def upload_resume(file: UploadFile = File(...)):
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    
+    file_path = "static/default_resume.pdf"
+    with open(file_path, "wb") as f:
+        f.write(await file.read())
+        
+    log_message("System", "Uploaded a fresh static resume to use as default.")
+    return {"status": "success", "message": "Default resume uploaded successfully."}
+
+@app.get("/api/resume/status")
+async def get_resume_status():
+    exists = os.path.exists("static/default_resume.pdf")
+    return {
+        "has_default": exists,
+        "mode": "Static Resume (default_resume.pdf)" if exists else "Dynamic Tailored Resumes"
+    }
+
+@app.delete("/api/resume")
+async def delete_resume():
+    file_path = "static/default_resume.pdf"
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        log_message("System", "Deleted static resume. Reverted to Dynamic Tailored Resumes.")
+        return {"status": "success", "message": "Reverted to dynamic tailoring."}
+    return {"status": "success", "message": "No static resume to delete."}
 
 if __name__ == "__main__":
     import uvicorn
